@@ -13,29 +13,35 @@ where.exe git.exe >nul 2>&1
 if errorlevel 1 goto erroGit
 git rev-parse --is-inside-work-tree >nul 2>&1
 if errorlevel 1 goto erroRepositorio
+rem O BAT deve ficar na raiz da propria instalacao Git.
+for /f "delims=" %%L in ('git rev-parse --show-prefix 2^>nul') do goto erroRepositorio
 
 rem Qualquer arquivo local nao ignorado impede a atualizacao segura.
+git status --porcelain --untracked-files=normal >nul 2>&1
+if errorlevel 1 goto erroRepositorio
 for /f "delims=" %%L in ('git status --porcelain --untracked-files=normal 2^>nul') do goto erroAlteracoes
 
 git remote get-url origin >nul 2>&1
 if errorlevel 1 goto erroRemoto
-for /f "delims=" %%L in ('git rev-parse --abbrev-ref --symbolic-full-name "@{upstream}" 2^>nul') do set "AUTOXS_UPSTREAM=%%L"
-if not defined AUTOXS_UPSTREAM goto erroUpstream
+git symbolic-ref --quiet --short HEAD | findstr /x /c:"main" >nul
+if errorlevel 1 goto erroBranch
 
 echo OK
 echo.
 echo Verificando atualizacoes...
-git fetch --prune origin
+git fetch origin main
 if errorlevel 1 goto erroBusca
-git merge-base --is-ancestor HEAD "%AUTOXS_UPSTREAM%"
+git show-ref --verify --quiet refs/remotes/origin/main
+if errorlevel 1 goto erroUpstream
+git merge-base --is-ancestor HEAD origin/main
 if errorlevel 1 goto erroHistorico
-git diff --quiet HEAD "%AUTOXS_UPSTREAM%"
+git diff --quiet HEAD origin/main
 if not errorlevel 1 goto atualizado
 
-git diff --quiet HEAD "%AUTOXS_UPSTREAM%" -- package.json package-lock.json
+git diff --quiet HEAD origin/main -- package.json package-lock.json
 if errorlevel 1 (set "AUTOXS_DEPENDENCIAS=1") else (set "AUTOXS_DEPENDENCIAS=0")
 echo Atualizacao encontrada. Baixando...
-git merge --ff-only "%AUTOXS_UPSTREAM%"
+git merge --ff-only origin/main
 if errorlevel 1 goto erroMerge
 echo Arquivos atualizados com sucesso.
 if "%AUTOXS_DEPENDENCIAS%"=="1" (
@@ -60,7 +66,7 @@ goto fimErro
 echo ERRO AO ATUALIZAR: instale o Git neste computador.
 goto fimErro
 :erroRepositorio
-echo ERRO AO ATUALIZAR: esta pasta ainda nao e um repositorio Git.
+echo ERRO AO ATUALIZAR: o BAT deve estar na raiz de uma instalacao Git valida.
 goto fimErro
 :erroAlteracoes
 echo ERRO AO ATUALIZAR: alteracoes locais detectadas.
@@ -69,8 +75,11 @@ goto fimErro
 :erroRemoto
 echo ERRO AO ATUALIZAR: o GitHub ainda nao foi conectado como origin.
 goto fimErro
+:erroBranch
+echo ERRO AO ATUALIZAR: esta instalacao precisa estar na branch main.
+goto fimErro
 :erroUpstream
-echo ERRO AO ATUALIZAR: a versao publicada ainda nao foi configurada neste PC.
+echo ERRO AO ATUALIZAR: origin/main ainda nao esta disponivel neste PC.
 goto fimErro
 :erroBusca
 echo ERRO AO ATUALIZAR: nao foi possivel consultar o GitHub.
