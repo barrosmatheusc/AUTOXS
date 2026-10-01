@@ -1,0 +1,35 @@
+# Dependencias instaladas em cada computador
+node_modules/
+
+# Dados e configuracoes locais
+.env
+.env.*
+!.env.example
+sessao.json
+**/canva-config.json
+*.pem
+*.p12
+*.pfx
+*.key
+
+# Perfis de navegador, cookies e sessoes
+perfil-playwright/
+perfil-chrome/
+perfil-canva/
+
+# Saidas locais, historico e experimentos abandonados
+distribuicao/
+experimentos/
+work/
+*.log
+*.tmp
+*.bak
+*.zip
+
+# Arquivos temporarios de ferramentas
+.cache/
+.playwright/
+playwright-report/
+test-results/
+debug/
+*.debug

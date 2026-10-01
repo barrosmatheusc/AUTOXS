@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoXS — Painel inicial</title>
+<link rel="stylesheet" href="adicionar-materias.css">
+<style>
+:root { color-scheme: dark; font-family: "Segoe UI", Arial, sans-serif; background: #101817; color: #edf5f1; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 32px 20px; background: radial-gradient(ellipse at 20% 0%, #23483a 0%, transparent 55%), #101817; }
+main { width: min(100%, 660px); }
+.brand { display: flex; align-items: center; gap: 10px; color: #b8c9c0; letter-spacing: .1em; font-size: 12px; font-weight: 600; text-transform: uppercase; margin-bottom: 24px; }
+.dot { height: 10px; width: 10px; border-radius: 50%; background: #87ddb2; }
+.card { background: #1b2824; border: 1px solid #35473e; border-radius: 24px; padding: 42px; box-shadow: 0 24px 80px #0003; }
+.eyebrow { color: #a4b8ae; font-size: 13px; margin: 0 0 16px; }
+h1 { font-size: clamp(30px, 5vw, 42px); font-weight: 600; line-height: 1.15; letter-spacing: -.04em; margin: 0 0 16px; }
+.description { color: #bbcbc3; font-size: 16px; line-height: 1.65; margin: 0; }
+button { width: 100%; background: #a2edc5; border: 0; border-radius: 12px; margin: 30px 0 20px; padding: 17px 20px; color: #10281b; font: 600 17px "Segoe UI", sans-serif; cursor: pointer; transition: background .15s; }
+button:hover:not(:disabled) { background: #c2fbdc; }
+button:focus-visible { outline: 3px solid white; outline-offset: 5px; }
+button:disabled { background: #608871; color: #e9f2ed; cursor: wait; }
+.adicionar { margin: 0 0 20px; background: transparent; color: #c7f4dc; border: 1px solid #668c77; }
+.adicionar:hover:not(:disabled) { background: #294436; }
+.compartilhar { margin: 0 0 20px; background: #263d34; color: #d7f6e5; border: 1px solid #719682; }
+.compartilhar:hover:not(:disabled) { background: #315043; }
+#status { min-height: 24px; color: #a9c4b5; line-height: 1.5; font-size: 14px; margin: 0; }
+#materia { color: #e2ece6; font-size: 14px; line-height: 1.5; margin: 8px 0 0; overflow-wrap: anywhere; }
+.summary { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 26px; }
+.summary[hidden] { display: none; }
+.stat { border-radius: 12px; background: #13201a; padding: 18px; }
+.stat strong { display: block; font-size: 29px; font-weight: 600; margin-bottom: 5px; }
+.stat span { color: #bbcbc3; font-size: 13px; }
+footer { color: #91a79b; font-size: 13px; line-height: 1.65; padding: 22px 12px 0; text-align: center; }
+@media(max-width: 480px) { .card { padding: 28px 22px; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="brand"><span class="dot"></span>Redação · Conferência manual</div>
+  <section class="card" aria-labelledby="titulo">
+    <p class="eyebrow" id="etapa">Tudo pronto para começar</p>
+    <h1 id="titulo">Vamos atualizar?</h1>
+    <p class="description">Confira as matérias da fila. As que já têm chapéu e foto são enviadas; as demais ficam abertas para você completar.</p>
+    <button id="atualizar" type="button" aria-haspopup="dialog">Atualizar</button>
+    <button id="adicionar" class="adicionar" type="button">Adicionar matérias</button>
+    <button id="compartilhar" class="compartilhar" type="button">Links de matérias</button>
+    <div aria-live="polite" role="status"><p id="status">A conferência começa quando você clicar.</p><p id="materia"></p></div>
+    <div class="summary" id="resumo" hidden>
+      <div class="stat"><strong id="enviadas">0</strong><span>matérias enviadas</span></div>
+      <div class="stat"><strong id="pendentes">0</strong><span>para conferir manualmente</span></div>
+    </div>
+  </section>
+  <footer>Até 25 matérias por rodada · Somente acima da matéria do jogo Brasil x Japão<br>Busca de fotos por palavra-chave, com 100 resultados por página.</footer>
+</main>
+<dialog id="escolher-pagina" class="materia-dialog" aria-labelledby="titulo-pagina">
+  <header><h2 id="titulo-pagina">Qual página vamos atualizar?</h2><button id="cancelar-pagina" class="secundario fechar" type="button" aria-label="Cancelar escolha da página">×</button></header>
+  <div class="miolo">
+    <p class="explicacao">Combine com a outra pessoa qual página cada um vai usar. Serão conferidas até 25 matérias da página escolhida, somente acima de “Quanto foi o jogo Brasil x Japão hoje? Veja resultado dos gols”. Essa matéria e as seguintes não serão abertas.</p>
+    <div class="acoes"><button type="button" data-pagina="1">Página 1</button><button type="button" data-pagina="2">Página 2</button></div>
+    <p class="recado">A escolha não reserva as matérias. A composição das páginas pode mudar quando a fila é atualizada.</p>
+  </div>
+</dialog>
+<script>
+const botao = document.querySelector('#atualizar');
+const botaoAdicao = document.querySelector('#adicionar');
+const botaoCompartilhar = document.querySelector('#compartilhar');
+botaoCompartilhar.addEventListener('click', async () => {
+  if (botaoCompartilhar.disabled) return;
+  botaoCompartilhar.disabled = true;
+  botaoCompartilhar.textContent = 'Abrindo Últimas…';
+  try {
+    const resposta = await window.abrirCompartilhamentoMaterias();
+    if (!resposta.ok) throw new Error(resposta.mensagem);
+    document.querySelector('#status').textContent = 'A página Últimas foi aberta em uma janela separada.';
+  } catch (erro) {
+    document.querySelector('#status').textContent = erro.message || 'Não foi possível abrir as matérias para compartilhamento.';
+  } finally {
+    botaoCompartilhar.disabled = false; botaoCompartilhar.textContent = 'Links de matérias';
+  }
+});
+botaoAdicao.addEventListener('click', async () => {
+  if (botaoAdicao.disabled) return;
+  botaoAdicao.disabled = true;
+  botaoAdicao.textContent = 'Abrindo janela…';
+  try {
+    const resposta = await window.abrirAdicaoMaterias();
+    if (!resposta.ok) throw new Error(resposta.mensagem);
+  } catch (erro) {
+    document.querySelector('#status').textContent = erro.message || 'Não foi possível abrir a janela de adição.';
+  } finally {
+    botaoAdicao.disabled = false; botaoAdicao.textContent = 'Adicionar matérias';
+  }
+});
+const escolhaPagina = document.querySelector('#escolher-pagina');
+botao.addEventListener('click', () => { if (!botao.disabled && !escolhaPagina.open) escolhaPagina.showModal(); });
+document.querySelector('#cancelar-pagina').addEventListener('click', () => escolhaPagina.close());
+escolhaPagina.querySelectorAll('[data-pagina]').forEach(b => b.addEventListener('click', () => {
+  escolhaPagina.close(); void atualizarPagina(Number(b.dataset.pagina));
+}));
+window.exibirProgresso = mensagem => {
+  const texto = String(mensagem).trim();
+  if (texto.startsWith('Matéria ')) document.querySelector('#materia').textContent = texto;
+  else document.querySelector('#status').textContent = texto;
+};
+async function atualizarPagina(pagina) {
+  if (botao.disabled) return;
+  botao.disabled = true;
+  botao.textContent = 'Atualizando…';
+  document.querySelector('#titulo').textContent = 'Conferindo a página ' + pagina;
+  document.querySelector('#etapa').textContent = 'Página ' + pagina + ' · Rodada em andamento';
+  document.querySelector('#status').textContent = 'Preparando a fila…';
+  document.querySelector('#materia').textContent = '';
+  document.querySelector('#resumo').hidden = true;
+  try {
+    const resultado = await window.atualizarMaterias(pagina);
+    if (!resultado.ok) throw new Error(resultado.mensagem || 'Não foi possível concluir a conferência.');
+    document.querySelector('#enviadas').textContent = resultado.resumo.enviadas;
+    document.querySelector('#pendentes').textContent = resultado.resumo.pendentes;
+    document.querySelector('#resumo').hidden = false;
+    document.querySelector('#etapa').textContent = 'Página ' + pagina + ' · Rodada concluída';
+    document.querySelector('#status').textContent = resultado.resumo.abertas
+      ? 'Confira as abas que ficaram abertas. Clique em Atualizar quando quiser conferir a fila novamente.'
+      : 'Nenhuma matéria nova na página ' + pagina + '. Você pode atualizar novamente quando quiser.';
+  } catch (erro) {
+    document.querySelector('#etapa').textContent = 'A conferência precisa de atenção';
+    document.querySelector('#status').textContent = erro.message;
+  } finally {
+    document.querySelector('#titulo').textContent = 'Vamos atualizar?';
+    document.querySelector('#materia').textContent = '';
+    botao.textContent = 'Atualizar';
+    botao.disabled = false;
+  }
+}
+</script>
+</body>
+</html>

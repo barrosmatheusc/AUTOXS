@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoXS — Adicionar matérias</title>
+  <link rel="stylesheet" href="adicionar-materias.css">
+</head>
+<body class="painel-adicao">
+  <header class="cabecalho-adicao"><div><h1>Adicionar matérias</h1><p>Até quatro matérias independentes. Cada espaço preenche sua própria aba no site.</p></div><div class="acoes-cabecalho"><button id="adicionar-mais" type="button">Adicionar +1</button><button id="voltar-painel" type="button">Painel inicial</button></div></header>
+  <main id="grade-materias" class="grade-materias" data-quantidade="1" aria-label="Espaços para adicionar matérias"></main>
+  <p id="recado-adicao" role="status"></p>
+  <template id="modelo-editor-materia">
+    <article class="materia-dialog editor-materia">
+      <header class="cabecalho-editor"><h2 data-numero-materia></h2><button id="fechar-espaco" type="button" class="secundario">Fechar quadro</button></header>
+      <div id="estado-identificacao" class="estado-identificacao" role="status" aria-live="polite" aria-atomic="true" hidden>
+        <span class="indicador-identificacao" aria-hidden="true"></span>
+        <span id="mensagem-identificacao"></span>
+        <span id="tempo-identificacao" class="tempo-identificacao" aria-hidden="true" hidden></span>
+      </div>
+      <section id="entrada-materia" class="secao-editor">
+        <div class="miolo">
+          <label for="texto-bruto">Texto recebido</label>
+          <textarea id="texto-bruto" placeholder="Cole aqui a matéria inteira, do jeito que você recebeu..."></textarea>
+          <div class="acoes"><button id="identificar-campos" type="button">Identificar campos</button><button id="identificar-gemini" type="button">Identificar com Gemini</button><button id="continuar-revisao" type="button" class="secundario" hidden>Continuar revisão</button></div>
+          <p class="recado" id="recado-entrada" role="status"></p>
+          <p class="explicacao">Identificar novamente refaz os campos deste espaço. Continuar revisão mantém os ajustes.</p>
+          <p class="explicacao">Identificar com Gemini envia somente o texto colado à IA do Google, usando a cota da sua API. Identificar campos continua funcionando sem IA.</p>
+        </div>
+      </section>
+      <section id="revisao-materia" class="secao-editor" hidden>
+        <div class="miolo"><p class="explicacao">Confira os campos e use Alterar se desejar. Campos em branco são permitidos.</p><p id="resumo-ia" class="explicacao" hidden></p><details id="trechos-ia" hidden><summary>Conferir trechos separados como metadados ou anexos</summary><p id="descartados-ia" class="valor"></p></details><div id="campos-identificados"></div></div>
+        <div class="rodape-revisao"><div class="acoes"><button id="enviar-ao-site" type="button">Enviar matéria ao site</button><button id="nova-materia" class="secundario" type="button">Nova matéria</button><button id="voltar-texto" class="secundario" type="button">Voltar ao texto</button></div><p class="recado">Após confirmar o preenchimento no site, este quadro abre uma nova matéria automaticamente. A publicação final é feita por você, no site.</p><p id="recado-revisao" class="recado" role="status"></p></div>
+      </section>
+    </article>
+  </template>
+  <script src="identificar-materia.js"></script>
+  <script src="sugestoes-chapeu.js"></script>
+  <script src="adicionar-materias.js"></script>
+</body>
+</html>

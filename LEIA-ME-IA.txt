@@ -1,0 +1,41 @@
+ANALISAR MATÉRIAS COM GEMINI
+
+Na adição de matérias, cole o texto e clique em Identificar com Gemini.
+Somente esse botão envia o texto colado à API Gemini do Google para separar
+título, chapéu, bigode, autor, categoria, imagem indicada e redação.
+O resultado aparece na revisão e pode ser alterado antes de preencher o site.
+O envio final continua sendo feito por você no site.
+
+O programa monta os campos com trechos do original. O Gemini pode sugerir a
+categoria. Autor ausente fica em branco e o chapéu fica em maiúsculas.
+Data e horário são preenchidos localmente. Links de imagem são referências;
+a análise não seleciona nem gera uma foto.
+
+CONFIGURAÇÃO
+No arquivo .env desta pasta, use sua própria chave:
+GEMINI_API_KEY=SUA_CHAVE_DO_GOOGLE_AI_STUDIO
+
+Não envie a chave por mensagem nem compartilhe seu .env com colegas.
+Não é necessário configurar OpenAI para esta função.
+A configuração existente não é substituída automaticamente.
+Depois de editar o .env, feche e abra o AutoXS novamente.
+
+Modelo padrão: gemini-2.5-flash-lite
+Para alterar o modelo, é possível definir no .env:
+AUTOXS_MODELO_GEMINI=gemini-2.5-flash-lite
+
+Chaves e limites: https://aistudio.google.com/
+Preços: https://ai.google.dev/gemini-api/docs/pricing
+A gratuidade depende da faixa e dos limites da sua conta. Se o projeto da API
+estiver na faixa paga, o Google pode cobrar pelo uso. Este programa não altera
+seu plano nem ativa faturamento. O plano gratuito pode usar os textos para
+melhorar os produtos do Google, conforme os termos do serviço.
+
+Cada clique inicia uma solicitação. Não há novas tentativas automáticas.
+A revisão mostra o total de tokens informado pelo Gemini quando disponível.
+Se faltar chave, houver limite ou a resposta vier incompleta, seu texto permanece
+na caixa. Você pode usar Identificar campos, que continua funcionando sem IA.
+Os trechos classificados como metadados ou anexos podem ser conferidos na revisão.
+
+Integração preparada apenas por edição de código. Ainda precisa de um teste
+autorizado para conferir a chave, a cota e o resultado da separação dos campos.
