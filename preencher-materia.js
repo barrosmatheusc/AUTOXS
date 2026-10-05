@@ -1,5 +1,4 @@
 const { textoParaHtml } = require('./texto-para-html');
-const { instalarBotaoLegenda } = require('./botao-legenda');
 const ORIGEM = 'https://redacao.tribunaweb.com.br';
 const URL_ADICIONAR = ORIGEM + '/news/add';
 const normalizar = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -110,8 +109,6 @@ function criarEnvioIndividual(context, garantirLogin, prepararFotos, criarAba) {
       abaAdicionar = await criarAba();
       ultimoEnvio = null;
       try {
-        // Cada espaço de adição tem seu próprio botão, inclusive antes da foto.
-        await instalarBotaoLegenda(abaAdicionar);
         await prepararFotos(abaAdicionar);
       }
       catch (erro) {
@@ -127,8 +124,6 @@ function criarEnvioIndividual(context, garantirLogin, prepararFotos, criarAba) {
     if (!await garantirLogin(aba)) throw new Error('Não foi possível entrar no site. Confira o acesso configurado.');
     await aba.goto(URL_ADICIONAR, {waitUntil:'domcontentloaded'});
     await aba.locator('#inp_title').waitFor({state:'visible'});
-    // Reposiciona junto ao rótulo após abrir um novo formulário na mesma aba.
-    await instalarBotaoLegenda(aba);
   }
   const enviar = async (entrada, log = async()=>{}) => {
     const campos = validarCampos(entrada.campos);

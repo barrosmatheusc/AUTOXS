@@ -9,6 +9,8 @@ const { criarEnvioAoSite } = require('./preencher-materia');
 const { mostrarAjudaFotos } = require('./ajuda-fotos');
 const { acompanharFotosAdicao } = require('./fotos-adicao');
 const { instalarBotaoLegenda } = require('./botao-legenda');
+const { instalarSugestoesChapeuCMS } = require('./sugestoes-chapeu-cms');
+const { validarRequisitosDaMateria, instalarProtecaoEnvioCMS } = require('./requisitos-materia');
 const { lerCategoriaAtual, podeGerarImagemRJ, gerarImagemRJ, gerarImagemPorSolicitacao, imagemEmGeracao } = require('./imagem-rj');
 
 const TITULO_LIMITE = 'Quanto foi o jogo Brasil x Japão hoje? Veja resultado dos gols';
@@ -173,11 +175,12 @@ async function mostrarAvisoMateriaIncompleta(aba, {temChapeu,temImagem}) {
 
 async function validarChapeuEFotoAntesDoEnvio(aba) {
   const campo = localizarCampoChapeu(aba);
-  const temChapeu = await campo.count() === 1 && Boolean((await campo.inputValue()).trim());
-  const imagem = await verificarImagemDestaque(aba);
-  const temImagem = imagem.temImagem === true;
-  if (temChapeu && temImagem) return true;
-  await mostrarAvisoMateriaIncompleta(aba, {temChapeu,temImagem});
+  const formulario = campo.locator('xpath=ancestor::form[1]');
+  const resultado = await formulario.count() === 1
+    ? await formulario.evaluate(validarRequisitosDaMateria)
+    : { valido: false, temChapeu: false, temFoto: false };
+  if (resultado.valido) return true;
+  await mostrarAvisoMateriaIncompleta(aba, { temChapeu: resultado.temChapeu, temImagem: resultado.temFoto });
   return false;
 }
 
@@ -407,6 +410,49 @@ async function prepararAbaMateria(aba, carregamentos) {
   }
 }
 
+function acompanharFerramentasEditorais(context) {
+  const paginasObservadas = new WeakSet();
+  const instalacoes = new WeakMap();
+  const ehFormularioMateria = pagina => {
+    try {
+      const url = new URL(pagina.url());
+      return url.origin === new URL(URL_NEWS).origin && /^\/news\/(?:add|edit\/[^/]+)\/?$/.test(url.pathname);
+    } catch { return false; }
+  };
+  function instalar(pagina) {
+    if (pagina.isClosed() || !ehFormularioMateria(pagina)) return Promise.resolve();
+    if (instalacoes.has(pagina)) return instalacoes.get(pagina);
+    const tarefa = (async () => {
+      await pagina.locator('#inp_title, input[name="title"]').first().waitFor({ state: 'attached', timeout: 10000 });
+      if (!ehFormularioMateria(pagina)) return;
+      const ferramentas = [
+        ['legendas', () => instalarBotaoLegenda(pagina)],
+        ['fotos', () => acompanharFotosAdicao(pagina, () => abrirPesquisaImagem(pagina, '', { iniciarPesquisa: true }))],
+        ['chapéu', () => instalarSugestoesChapeuCMS(pagina)],
+        ['proteção de envio', () => instalarProtecaoEnvioCMS(pagina)]
+      ];
+      for (const [nome, preparar] of ferramentas) {
+        try { await preparar(); }
+        catch (erro) { console.warn(`[AUTOXS] Ferramenta ${nome}:`, erro.message); }
+      }
+    })().catch(erro => {
+      if (!pagina.isClosed()) console.warn('[AUTOXS] Ferramentas editoriais:', erro.message);
+    }).finally(() => instalacoes.delete(pagina));
+    instalacoes.set(pagina, tarefa);
+    return tarefa;
+  }
+  function observar(pagina) {
+    if (paginasObservadas.has(pagina)) return;
+    paginasObservadas.add(pagina);
+    pagina.on('domcontentloaded', () => { void instalar(pagina); });
+    pagina.on('framenavigated', frame => { if (frame === pagina.mainFrame()) void instalar(pagina); });
+    void instalar(pagina);
+  }
+  context.on('page', observar);
+  context.pages().forEach(observar);
+  return instalar;
+}
+
 async function executar() {
   // Os caminhos são relativos a este arquivo, mesmo quando iniciado de outra pasta.
   require('dotenv').config({ path: path.join(__dirname, '.env'), quiet: true });
@@ -416,6 +462,7 @@ async function executar() {
   const context = await chromium.launchPersistentContext(path.join(__dirname, 'perfil-playwright'), {
     headless: false, viewport: null
   });
+  const instalarFerramentasEditorais = acompanharFerramentasEditorais(context);
   let encerramentoAutoXS = null;
   const encerrarAutoXS = () => {
     if (encerramentoAutoXS) return encerramentoAutoXS;
@@ -732,7 +779,7 @@ async function executar() {
         acompanhamentos.get(aba)?.();
         acompanhamentos.delete(aba);
         await prepararAbaMateria(aba, carregamentos);
-        await instalarBotaoLegenda(aba);
+        await instalarFerramentasEditorais(aba);
       },
       acompanhar: async (aba, materia) => {
         if (acompanhamentos.has(aba) || enviadas.has(materia.url)) return;
@@ -757,9 +804,7 @@ async function executar() {
     });
     console.log(`\nConferência concluída: ${resumo.enviadas} enviadas; ${resumo.pendentes} para conferir manualmente.`);
     return resumo;
-  }, criarEnvioAoSite(context, garantirLogin, async aba => {
-    await acompanharFotosAdicao(aba, () => abrirPesquisaImagem(aba, '', { iniciarPesquisa:true }));
-  }, () => janelaAdicao.newPage()), janelaAdicao);
+  }, criarEnvioAoSite(context, garantirLogin, async () => {}, () => janelaAdicao.newPage()), janelaAdicao);
   console.log('Clique em Atualizar no painel para iniciar uma rodada.');
 }
 

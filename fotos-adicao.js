@@ -1,5 +1,7 @@
-// Acompanha apenas a aba de adição. Não abre o acervo nem escolhe fotos sozinho.
+// Acompanha o seletor de imagem destaque em qualquer formulário de matéria.
+const paginasPreparadas = new WeakSet();
 async function acompanharFotosAdicao(aba, mostrarSugestoes) {
+  if (paginasPreparadas.has(aba)) return;
   let ocupado = false;
   await aba.exposeBinding('__autoxsFotosAdicao', async ({ frame }) => {
     if (frame !== aba.mainFrame() || ocupado) return {ok:false};
@@ -45,5 +47,6 @@ async function acompanharFotosAdicao(aba, mostrarSugestoes) {
   };
   await aba.addInitScript(instalar);
   await aba.evaluate(instalar);
+  paginasPreparadas.add(aba);
 }
 module.exports = { acompanharFotosAdicao };
