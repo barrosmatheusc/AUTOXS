@@ -1,15 +1,15 @@
 // Esta função não depende de Node: a mesma regra é usada na página e no envio do AutoXS.
-function validarRequisitosDaMateria(formulario) {
+function validarRequisitosDaMateria(formulario, verificarFoto = true) {
   const resultado = { valido: false, temChapeu: false, temFoto: false, fotoIdentificavel: false, faltando: [], quantidadeFotos: 0 };
   if (!formulario) {
-    resultado.faltando = ['chapeu', 'foto'];
+    resultado.faltando = ['chapeu'];
     return resultado;
   }
   const campo = formulario.querySelector('#inp_hat, input[name="hat"], input[name*="chapeu" i], textarea[name*="chapeu" i]');
   resultado.temChapeu = Boolean(campo && String(campo.value || '').trim());
 
-  // Na Adição, a foto é opcional; a proteção do AutoXS exige somente chapéu.
-  if (/^\/news\/add\/?$/.test(formulario.ownerDocument.defaultView?.location.pathname || '')) {
+  // A proteção de envio exige somente chapéu; a leitura de foto continua disponível para outras ferramentas.
+  if (!verificarFoto || /^\/news\/add\/?$/.test(formulario.ownerDocument.defaultView?.location.pathname || '')) {
     resultado.temFoto = true;
     if (!resultado.temChapeu) resultado.faltando.push('chapeu');
     resultado.valido = resultado.temChapeu;
@@ -91,7 +91,6 @@ function validarRequisitosDaMateria(formulario) {
   }
   resultado.temFoto = resultado.quantidadeFotos > 0;
   if (!resultado.temChapeu) resultado.faltando.push('chapeu');
-  if (!resultado.temFoto) resultado.faltando.push('foto');
   resultado.valido = resultado.faltando.length === 0;
   return resultado;
 }
@@ -109,9 +108,7 @@ async function instalarProtecaoEnvioCMS(pagina) {
       /^\/news\/(?:add|edit\/[^/]+)\/?$/.test(location.pathname);
 
     function avisar(resultado) {
-      const mensagem = !resultado.temChapeu && !resultado.temFoto
-        ? '⚠️ CHAPÉU E FOTO FALTANDO'
-        : !resultado.temChapeu ? '⚠️ CHAPÉU FALTANDO' : '⚠️ FOTO FALTANDO';
+      const mensagem = '⚠️ CHAPÉU FALTANDO';
       document.getElementById('autoxs-aviso-materia-incompleta')?.remove();
       const aviso = document.createElement('div');
       aviso.id = 'autoxs-aviso-materia-incompleta';
@@ -137,19 +134,11 @@ async function instalarProtecaoEnvioCMS(pagina) {
           window.setTimeout(() => { if (campo.isConnected) campo.style.outline = borda; }, 2500);
         }
       }
-      if (!resultado.temFoto) {
-        const mais = [...formulario.querySelectorAll('button')].find(botao => botao.textContent.trim() === '+');
-        if (mais) {
-          const borda = mais.style.outline;
-          mais.style.outline = '3px solid #b42318';
-          window.setTimeout(() => { if (mais.isConnected) mais.style.outline = borda; }, 2500);
-        }
-      }
     }
 
     function barrarSeIncompleta(evento, formulario) {
       if (!reconhecer(formulario)) return;
-      const resultado = validarRequisitosDaMateria(formulario);
+      const resultado = validarRequisitosDaMateria(formulario, false);
       if (resultado.valido) return;
       evento.preventDefault();
       evento.stopImmediatePropagation();
@@ -163,11 +152,11 @@ async function instalarProtecaoEnvioCMS(pagina) {
       if (!(campo instanceof HTMLInputElement) ||
           !campo.matches('#inp_title, input[name="title"], #inp_hat, input[name="hat"], #inp_author, input[name="author"]') ||
           !reconhecer(campo.form)) return;
-      if (/^\/news\/add\/?$/.test(location.pathname) && validarRequisitosDaMateria(campo.form).valido) return;
+      if (/^\/news\/add\/?$/.test(location.pathname) && validarRequisitosDaMateria(campo.form, false).valido) return;
       evento.preventDefault();
       evento.stopImmediatePropagation();
       if (evento.type === 'keydown' && !evento.repeat) {
-        const resultado = validarRequisitosDaMateria(campo.form);
+        const resultado = validarRequisitosDaMateria(campo.form, false);
         if (!resultado.valido) avisar(resultado);
       }
     }

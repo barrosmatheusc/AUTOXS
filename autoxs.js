@@ -150,10 +150,8 @@ async function lerPendencias(aba) {
   return { temChapeu: Boolean(chapeu), temImagem: imagem.temImagem, categoria, conferenciaCategoria };
 }
 
-async function mostrarAvisoMateriaIncompleta(aba, {temChapeu,temImagem}) {
-  const mensagem = !temChapeu && !temImagem
-    ? '⚠️ CHAPÉU E FOTO FALTANDO'
-    : !temChapeu ? '⚠️ CHAPÉU FALTANDO' : '⚠️ FOTO FALTANDO';
+async function mostrarAvisoMateriaIncompleta(aba) {
+  const mensagem = '⚠️ CHAPÉU FALTANDO';
   await aba.bringToFront();
   await aba.evaluate(texto => {
     document.getElementById('autoxs-aviso-materia-incompleta')?.remove();
@@ -173,14 +171,10 @@ async function mostrarAvisoMateriaIncompleta(aba, {temChapeu,temImagem}) {
   await aba.waitForTimeout(1050);
 }
 
-async function validarChapeuEFotoAntesDoEnvio(aba) {
+async function validarChapeuAntesDoEnvio(aba) {
   const campo = localizarCampoChapeu(aba);
-  const formulario = campo.locator('xpath=ancestor::form[1]');
-  const resultado = await formulario.count() === 1
-    ? await formulario.evaluate(validarRequisitosDaMateria)
-    : { valido: false, temChapeu: false, temFoto: false };
-  if (resultado.valido) return true;
-  await mostrarAvisoMateriaIncompleta(aba, { temChapeu: resultado.temChapeu, temImagem: resultado.temFoto });
+  if (await campo.count() === 1 && (await campo.inputValue()).trim()) return true;
+  await mostrarAvisoMateriaIncompleta(aba);
   return false;
 }
 
@@ -192,8 +186,8 @@ async function enviarMateria(aba) {
   // O ícone de avião do CMS faz parte do nome acessível do botão Enviar.
   const enviar = formulario.getByRole('button', { name: /^[^\p{L}\p{N}]*(?:enviar|salvar|atualizar)(?:\s+mat[eé]ria)?[^\p{L}\p{N}]*$/iu }).filter({ visible: true });
   if (await enviar.count() !== 1) throw new Error('Botão Enviar/Salvar/Atualizar ausente ou ambíguo no formulário da matéria.');
-  // Última proteção antes do envio real: mantém a matéria aberta quando faltar chapéu ou foto.
-  if (!await validarChapeuEFotoAntesDoEnvio(aba)) return false;
+  // Última proteção antes do envio real: mantém a matéria aberta quando faltar chapéu.
+  if (!await validarChapeuAntesDoEnvio(aba)) return false;
   if (!await enviar.isEnabled()) return false;
   if (!await formulario.evaluate(form => form.checkValidity())) return false;
   const urlInicial = aba.url();
@@ -251,14 +245,14 @@ async function processarLote(materias, operacoes) {
           throw new Error('A aba da matéria não está mais disponível.');
         }
         if (operacoes.preparar) await operacoes.preparar(aba);
-        etapa = 'conferir novamente chapéu e foto';
+        etapa = 'conferir novamente chapéu';
         const estado = await operacoes.ler(aba);
         if (estado.conferenciaCategoria?.revisar) {
           await operacoes.log('  ' + estado.conferenciaCategoria.mensagem);
           continue;
         }
-        if (estado.temChapeu !== true || estado.temImagem !== true) {
-          await operacoes.log(estado.temChapeu !== true ? '  Falta chapéu. Aba mantida para preenchimento manual.' : '  Foto não confirmada. Confira a aba manualmente.');
+        if (estado.temChapeu !== true) {
+          await operacoes.log('  Falta chapéu. Aba mantida para preenchimento manual.');
           continue;
         }
         if (interrompido()) return;
@@ -306,15 +300,13 @@ async function processarLote(materias, operacoes) {
     await retomarGeracoesProntas();
     if (interrompido()) break;
     await operacoes.log(`\nMatéria ${indice + 1}/${abertas.length} — ${tituloCurto(materia)}`);
-    let etapa = 'conferir chapéu e foto';
+    let etapa = 'conferir chapéu';
     try {
       if (operacoes.preparar) await operacoes.preparar(aba);
       const estado = await operacoes.ler(aba);
       await operacoes.log(estado.temChapeu ? '  Chapéu conferido.' : '  Falta chapéu. Preencha manualmente.');
-      await operacoes.log(estado.temImagem === true ? '  Foto conferida.' : estado.temImagem === false
-        ? '  Falta foto.' : '  Não foi possível confirmar a foto.');
       if (estado.conferenciaCategoria?.mensagem) await operacoes.log('  ' + estado.conferenciaCategoria.mensagem);
-      if (estado.temChapeu === true && estado.temImagem === true && !estado.conferenciaCategoria?.revisar) {
+      if (estado.temChapeu === true && !estado.conferenciaCategoria?.revisar) {
         etapa = 'enviar a matéria';
         if (await operacoes.enviar(aba)) {
           resumo.enviadas++;
@@ -325,7 +317,7 @@ async function processarLote(materias, operacoes) {
         }
         await operacoes.log('  Envio não confirmado. Confira a matéria na aba aberta.');
       } else {
-        if (estado.temImagem === false) {
+        if (estado.temChapeu === true && estado.temImagem === false) {
           if (podeGerarImagemRJ(estado.categoria, estado.temImagem)) {
             etapa = 'gerar a foto com Nano Banana';
             await operacoes.log('  Categoria: RJ em Foco.');
@@ -832,9 +824,9 @@ module.exports = { verificarImagemDestaque, obterOuAbrirMateria, localizarCampoC
       .trim();
   }
   async function verificarImagemDestaque(aba) {
-    const formulario = localizarCampoChapeu(aba).locator('xpath=ancestor::form[1]');
-    if (await formulario.count() !== 1) return { temImagem: null, quantidade: 0 };
     try {
+      const formulario = localizarCampoChapeu(aba).locator('xpath=ancestor::form[1]');
+      if (await formulario.count() !== 1) return { temImagem: null, quantidade: 0 };
       const resultado = await formulario.evaluate(validarRequisitosDaMateria);
       return {
         temImagem: resultado.fotoIdentificavel ? resultado.temFoto : null,
