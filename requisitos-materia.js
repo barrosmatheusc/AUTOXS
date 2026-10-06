@@ -152,7 +152,7 @@ async function instalarProtecaoEnvioCMS(pagina) {
       if (!(campo instanceof HTMLInputElement) ||
           !campo.matches('#inp_title, input[name="title"], #inp_hat, input[name="hat"], #inp_author, input[name="author"]') ||
           !reconhecer(campo.form)) return;
-      if (/^\/news\/add\/?$/.test(location.pathname) && validarRequisitosDaMateria(campo.form, false).valido) return;
+      if (validarRequisitosDaMateria(campo.form, false).valido) return;
       evento.preventDefault();
       evento.stopImmediatePropagation();
       if (evento.type === 'keydown' && !evento.repeat) {

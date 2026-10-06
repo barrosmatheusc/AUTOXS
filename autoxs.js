@@ -171,11 +171,14 @@ async function mostrarAvisoMateriaIncompleta(aba) {
   await aba.waitForTimeout(1050);
 }
 
-async function validarChapeuAntesDoEnvio(aba) {
+async function validarChapeuEFotoAntesDoEnvio(aba) {
   const campo = localizarCampoChapeu(aba);
-  if (await campo.count() === 1 && (await campo.inputValue()).trim()) return true;
-  await mostrarAvisoMateriaIncompleta(aba);
-  return false;
+  if (await campo.count() !== 1 || !(await campo.inputValue()).trim()) {
+    await mostrarAvisoMateriaIncompleta(aba);
+    return false;
+  }
+  const imagem = await verificarImagemDestaque(aba);
+  return imagem.temImagem === true;
 }
 
 async function enviarMateria(aba) {
@@ -186,8 +189,8 @@ async function enviarMateria(aba) {
   // O ícone de avião do CMS faz parte do nome acessível do botão Enviar.
   const enviar = formulario.getByRole('button', { name: /^[^\p{L}\p{N}]*(?:enviar|salvar|atualizar)(?:\s+mat[eé]ria)?[^\p{L}\p{N}]*$/iu }).filter({ visible: true });
   if (await enviar.count() !== 1) throw new Error('Botão Enviar/Salvar/Atualizar ausente ou ambíguo no formulário da matéria.');
-  // Última proteção antes do envio real: mantém a matéria aberta quando faltar chapéu.
-  if (!await validarChapeuAntesDoEnvio(aba)) return false;
+  // Última proteção antes do envio real: exige chapéu e foto, sem popup para foto ausente.
+  if (!await validarChapeuEFotoAntesDoEnvio(aba)) return false;
   if (!await enviar.isEnabled()) return false;
   if (!await formulario.evaluate(form => form.checkValidity())) return false;
   const urlInicial = aba.url();
@@ -245,14 +248,14 @@ async function processarLote(materias, operacoes) {
           throw new Error('A aba da matéria não está mais disponível.');
         }
         if (operacoes.preparar) await operacoes.preparar(aba);
-        etapa = 'conferir novamente chapéu';
+        etapa = 'conferir novamente chapéu e foto';
         const estado = await operacoes.ler(aba);
         if (estado.conferenciaCategoria?.revisar) {
           await operacoes.log('  ' + estado.conferenciaCategoria.mensagem);
           continue;
         }
-        if (estado.temChapeu !== true) {
-          await operacoes.log('  Falta chapéu. Aba mantida para preenchimento manual.');
+        if (estado.temChapeu !== true || estado.temImagem !== true) {
+          await operacoes.log(estado.temChapeu !== true ? '  Falta chapéu. Aba mantida para preenchimento manual.' : '  Foto não confirmada. Confira a aba manualmente.');
           continue;
         }
         if (interrompido()) return;
@@ -300,13 +303,15 @@ async function processarLote(materias, operacoes) {
     await retomarGeracoesProntas();
     if (interrompido()) break;
     await operacoes.log(`\nMatéria ${indice + 1}/${abertas.length} — ${tituloCurto(materia)}`);
-    let etapa = 'conferir chapéu';
+    let etapa = 'conferir chapéu e foto';
     try {
       if (operacoes.preparar) await operacoes.preparar(aba);
       const estado = await operacoes.ler(aba);
       await operacoes.log(estado.temChapeu ? '  Chapéu conferido.' : '  Falta chapéu. Preencha manualmente.');
+      await operacoes.log(estado.temImagem === true ? '  Foto conferida.' : estado.temImagem === false
+        ? '  Falta foto.' : '  Não foi possível confirmar a foto.');
       if (estado.conferenciaCategoria?.mensagem) await operacoes.log('  ' + estado.conferenciaCategoria.mensagem);
-      if (estado.temChapeu === true && !estado.conferenciaCategoria?.revisar) {
+      if (estado.temChapeu === true && estado.temImagem === true && !estado.conferenciaCategoria?.revisar) {
         etapa = 'enviar a matéria';
         if (await operacoes.enviar(aba)) {
           resumo.enviadas++;
@@ -317,7 +322,7 @@ async function processarLote(materias, operacoes) {
         }
         await operacoes.log('  Envio não confirmado. Confira a matéria na aba aberta.');
       } else {
-        if (estado.temChapeu === true && estado.temImagem === false) {
+        if (estado.temImagem === false) {
           if (podeGerarImagemRJ(estado.categoria, estado.temImagem)) {
             etapa = 'gerar a foto com Nano Banana';
             await operacoes.log('  Categoria: RJ em Foco.');
@@ -823,16 +828,149 @@ module.exports = { verificarImagemDestaque, obterOuAbrirMateria, localizarCampoC
       )
       .trim();
   }
-  async function verificarImagemDestaque(aba) {
-    try {
-      const formulario = localizarCampoChapeu(aba).locator('xpath=ancestor::form[1]');
-      if (await formulario.count() !== 1) return { temImagem: null, quantidade: 0 };
-      const resultado = await formulario.evaluate(validarRequisitosDaMateria);
+  async function verificarImagemDestaque(
+    aba
+  ) {
+
+    const botoesMais =
+      aba.getByRole(
+        'button',
+        {
+          name: '+',
+          exact: true
+        }
+      );
+
+    const quantidadeBotoes =
+      await botoesMais.count();
+
+    if (
+      quantidadeBotoes < 2
+    ) {
+
       return {
-        temImagem: resultado.fotoIdentificavel ? resultado.temFoto : null,
-        quantidade: resultado.quantidadeFotos
+        temImagem: null,
+        quantidade: 0
       };
+    }
+
+    const botaoImagem =
+      botoesMais.nth(0);
+
+    const botaoGaleria =
+      botoesMais.nth(1);
+
+    try {
+
+      await botaoImagem
+        .scrollIntoViewIfNeeded();
+
+      await aba.waitForTimeout(
+        300
+      );
+
+      const boxImagem =
+        await botaoImagem
+          .boundingBox();
+
+      const boxGaleria =
+        await botaoGaleria
+          .boundingBox();
+
+      if (
+        !boxImagem ||
+        !boxGaleria
+      ) {
+
+        return {
+          temImagem: null,
+          quantidade: 0
+        };
+      }
+
+      if (boxGaleria.y <= boxImagem.y) return { temImagem: null, quantidade: 0 };
+
+      const inicioY =
+        boxImagem.y;
+
+      const fimY =
+        boxGaleria.y;
+
+      const imagens =
+        aba.locator('img');
+
+      const totalImagens =
+        await imagens.count();
+
+      let imagensDestaque = 0;
+
+      for (
+        let i = 0;
+        i < totalImagens;
+        i++
+      ) {
+
+        const imagem =
+          imagens.nth(i);
+
+        try {
+
+          if (
+            !(await imagem.isVisible())
+          ) {
+            continue;
+          }
+
+          const box =
+            await imagem
+              .boundingBox();
+
+          if (!box) {
+            continue;
+          }
+
+          const dentroDaArea =
+            box.y > inicioY &&
+            box.y < fimY;
+
+          const tamanhoReal =
+            box.width >= 80 &&
+            box.height >= 50;
+
+          if (
+            dentroDaArea &&
+            tamanhoReal
+          ) {
+
+            const carregamento = await imagem.evaluate(img => ({
+              completa: img.complete,
+              largura: img.naturalWidth,
+              src: img.currentSrc || img.src || ''
+            }));
+            if (!carregamento.completa || carregamento.largura === 0) {
+              return { temImagem: null, quantidade: 0 };
+            }
+            if (/(?:placeholder|no[-_]?image|sem[-_]?imagem|default[-_]?image)/i.test(carregamento.src)) continue;
+            imagensDestaque++;
+          }
+
+        } catch {}
+      }
+
+      return {
+
+        temImagem:
+          imagensDestaque > 0,
+
+        quantidade:
+          imagensDestaque
+      };
+
     } catch {
-      return { temImagem: null, quantidade: 0 };
+
+      return {
+        temImagem: null,
+        quantidade: 0
+      };
     }
   }
