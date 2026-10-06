@@ -831,149 +831,16 @@ module.exports = { verificarImagemDestaque, obterOuAbrirMateria, localizarCampoC
       )
       .trim();
   }
-  async function verificarImagemDestaque(
-    aba
-  ) {
-
-    const botoesMais =
-      aba.getByRole(
-        'button',
-        {
-          name: '+',
-          exact: true
-        }
-      );
-
-    const quantidadeBotoes =
-      await botoesMais.count();
-
-    if (
-      quantidadeBotoes < 2
-    ) {
-
-      return {
-        temImagem: null,
-        quantidade: 0
-      };
-    }
-
-    const botaoImagem =
-      botoesMais.nth(0);
-
-    const botaoGaleria =
-      botoesMais.nth(1);
-
+  async function verificarImagemDestaque(aba) {
+    const formulario = localizarCampoChapeu(aba).locator('xpath=ancestor::form[1]');
+    if (await formulario.count() !== 1) return { temImagem: null, quantidade: 0 };
     try {
-
-      await botaoImagem
-        .scrollIntoViewIfNeeded();
-
-      await aba.waitForTimeout(
-        300
-      );
-
-      const boxImagem =
-        await botaoImagem
-          .boundingBox();
-
-      const boxGaleria =
-        await botaoGaleria
-          .boundingBox();
-
-      if (
-        !boxImagem ||
-        !boxGaleria
-      ) {
-
-        return {
-          temImagem: null,
-          quantidade: 0
-        };
-      }
-
-      if (boxGaleria.y <= boxImagem.y) return { temImagem: null, quantidade: 0 };
-
-      const inicioY =
-        boxImagem.y;
-
-      const fimY =
-        boxGaleria.y;
-
-      const imagens =
-        aba.locator('img');
-
-      const totalImagens =
-        await imagens.count();
-
-      let imagensDestaque = 0;
-
-      for (
-        let i = 0;
-        i < totalImagens;
-        i++
-      ) {
-
-        const imagem =
-          imagens.nth(i);
-
-        try {
-
-          if (
-            !(await imagem.isVisible())
-          ) {
-            continue;
-          }
-
-          const box =
-            await imagem
-              .boundingBox();
-
-          if (!box) {
-            continue;
-          }
-
-          const dentroDaArea =
-            box.y > inicioY &&
-            box.y < fimY;
-
-          const tamanhoReal =
-            box.width >= 80 &&
-            box.height >= 50;
-
-          if (
-            dentroDaArea &&
-            tamanhoReal
-          ) {
-
-            const carregamento = await imagem.evaluate(img => ({
-              completa: img.complete,
-              largura: img.naturalWidth,
-              src: img.currentSrc || img.src || ''
-            }));
-            if (!carregamento.completa || carregamento.largura === 0) {
-              return { temImagem: null, quantidade: 0 };
-            }
-            if (/(?:placeholder|no[-_]?image|sem[-_]?imagem|default[-_]?image)/i.test(carregamento.src)) continue;
-            imagensDestaque++;
-          }
-
-        } catch {}
-      }
-
+      const resultado = await formulario.evaluate(validarRequisitosDaMateria);
       return {
-
-        temImagem:
-          imagensDestaque > 0,
-
-        quantidade:
-          imagensDestaque
+        temImagem: resultado.fotoIdentificavel ? resultado.temFoto : null,
+        quantidade: resultado.quantidadeFotos
       };
-
     } catch {
-
-      return {
-        temImagem: null,
-        quantidade: 0
-      };
+      return { temImagem: null, quantidade: 0 };
     }
   }

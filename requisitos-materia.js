@@ -1,6 +1,6 @@
 // Esta função não depende de Node: a mesma regra é usada na página e no envio do AutoXS.
 function validarRequisitosDaMateria(formulario) {
-  const resultado = { valido: false, temChapeu: false, temFoto: false, faltando: [], quantidadeFotos: 0 };
+  const resultado = { valido: false, temChapeu: false, temFoto: false, fotoIdentificavel: false, faltando: [], quantidadeFotos: 0 };
   if (!formulario) {
     resultado.faltando = ['chapeu', 'foto'];
     return resultado;
@@ -8,24 +8,86 @@ function validarRequisitosDaMateria(formulario) {
   const campo = formulario.querySelector('#inp_hat, input[name="hat"], input[name*="chapeu" i], textarea[name*="chapeu" i]');
   resultado.temChapeu = Boolean(campo && String(campo.value || '').trim());
 
-  // No CMS, o primeiro + pertence à imagem destaque e o segundo à galeria.
-  // Imagens do corpo, fora desse trecho do formulário, não servem como destaque.
-  const botoesMais = [...formulario.querySelectorAll('button')]
-    .filter(botao => botao.textContent.trim() === '+' && botao.getClientRects().length);
-  if (botoesMais.length >= 2) {
-    const inicio = botoesMais[0].getBoundingClientRect().top;
-    const fim = botoesMais[1].getBoundingClientRect().top;
-    if (fim > inicio) {
-      for (const imagem of formulario.querySelectorAll('img')) {
-        if (!imagem.getClientRects().length || getComputedStyle(imagem).visibility === 'hidden') continue;
-        const box = imagem.getBoundingClientRect();
-        if (box.top <= inicio || box.top >= fim || box.width < 80 || box.height < 50) continue;
-        if (!imagem.complete || !imagem.naturalWidth) continue;
-        const src = imagem.currentSrc || imagem.src || '';
-        if (/(?:placeholder|no[-_]?image|sem[-_]?imagem|default[-_]?image)/i.test(src)) continue;
-        resultado.quantidadeFotos++;
+  // Na Adição, a foto é opcional; a proteção do AutoXS exige somente chapéu.
+  if (/^\/news\/add\/?$/.test(formulario.ownerDocument.defaultView?.location.pathname || '')) {
+    resultado.temFoto = true;
+    if (!resultado.temChapeu) resultado.faltando.push('chapeu');
+    resultado.valido = resultado.temChapeu;
+    return resultado;
+  }
+
+  const documento = formulario.ownerDocument;
+  const visivel = elemento => elemento.getClientRects().length > 0 &&
+    getComputedStyle(elemento).visibility !== 'hidden';
+  const fotoValida = imagem => {
+    if (!visivel(imagem) || !imagem.complete || imagem.naturalWidth <= 0 || imagem.naturalHeight <= 0) return false;
+    const box = imagem.getBoundingClientRect();
+    if (box.width < 80 || box.height < 50) return false;
+    const src = imagem.currentSrc || imagem.src || '';
+    return Boolean(src) && !/(?:placeholder|no[-_]?image|sem[-_]?imagem|default[-_]?image)/i.test(src);
+  };
+
+  // O heading delimita a seção editorial. Não depende de scroll nem dos botões +.
+  const rotulos = [...documento.querySelectorAll('h1, h2, h3, h4, h5, h6')]
+    .filter(elemento => visivel(elemento) &&
+      !elemento.closest('.modal, [role="dialog"], dialog, .rx-editor') &&
+      /^imagem\s+(?:de\s+)?destaque\s*[:*]?$/i.test(elemento.textContent.replace(/\s+/g, ' ').trim()));
+  if (rotulos.length === 1) {
+    resultado.fotoIdentificavel = true;
+    const rotulo = rotulos[0];
+    const nivel = Number(rotulo.tagName.slice(1));
+    try {
+      const headingsSeguintes = [...documento.querySelectorAll('h1, h2, h3, h4, h5, h6')]
+        .filter(elemento => elemento !== rotulo && visivel(elemento) &&
+          !elemento.closest('.modal, [role="dialog"], dialog, .rx-editor') &&
+          Boolean(rotulo.compareDocumentPosition(elemento) & Node.DOCUMENT_POSITION_FOLLOWING));
+      const proximaSecao = headingsSeguintes.find(elemento =>
+        /^galeria(?:\s+de\s+fotos|\s+de\s+imagens)?\s*[:*]?$/i.test(elemento.textContent.replace(/\s+/g, ' ').trim()) ||
+        Number(elemento.tagName.slice(1)) <= nivel);
+      // O ancestral comum dos dois cabeçalhos delimita o trecho da seção; a linha do H5 não contém o card.
+      let container = rotulo.parentElement;
+      if (proximaSecao) {
+        while (container && !container.contains(proximaSecao)) container = container.parentElement;
+      } else {
+        container = rotulo.closest('form') || documento.body;
       }
-    }
+      if (container) {
+        const walker = documento.createTreeWalker(container, 1);
+        walker.currentNode = rotulo;
+        let nosPercorridos = 0;
+        while (walker.nextNode() && ++nosPercorridos <= 5000) {
+          const elemento = walker.currentNode;
+          if (elemento === proximaSecao) break;
+          if (elemento.tagName !== 'IMG') continue;
+          const classeCorreta = elemento.matches('img.rounded-1.me-9.flex-shrink-0');
+          const envoltorioCorreto = Boolean(elemento.closest('.d-flex.align-items-center'));
+          const excluida = Boolean(elemento.closest('.rx-editor, [contenteditable="true"], .modal, [role="dialog"], dialog'));
+          const aceita = classeCorreta && envoltorioCorreto && !excluida && fotoValida(elemento);
+          if (!aceita) continue;
+          resultado.quantidadeFotos = 1;
+          break;
+        }
+      }
+    } catch {}
+  } else if (rotulos.length === 0) {
+    // Layout anterior do Atualizar matérias (57fe684): imagem entre os dois primeiros +.
+    try {
+      const botoesMais = [...documento.querySelectorAll('button')]
+        .filter(botao => botao.textContent.trim() === '+' && visivel(botao));
+      if (botoesMais.length >= 2) {
+        const inicio = botoesMais[0].getBoundingClientRect().top;
+        const fim = botoesMais[1].getBoundingClientRect().top;
+        if (fim > inicio) {
+          resultado.fotoIdentificavel = true;
+          for (const imagem of documento.querySelectorAll('img')) {
+            if (imagem.closest('.rx-editor, [contenteditable="true"], .modal, [role="dialog"], dialog') ||
+                !fotoValida(imagem)) continue;
+            const box = imagem.getBoundingClientRect();
+            if (box.top > inicio && box.top < fim) resultado.quantidadeFotos++;
+          }
+        }
+      }
+    } catch {}
   }
   resultado.temFoto = resultado.quantidadeFotos > 0;
   if (!resultado.temChapeu) resultado.faltando.push('chapeu');
@@ -33,7 +95,6 @@ function validarRequisitosDaMateria(formulario) {
   resultado.valido = resultado.faltando.length === 0;
   return resultado;
 }
-
 const paginasPreparadas = new WeakSet();
 async function instalarProtecaoEnvioCMS(pagina) {
   if (paginasPreparadas.has(pagina)) return;
@@ -102,6 +163,7 @@ async function instalarProtecaoEnvioCMS(pagina) {
       if (!(campo instanceof HTMLInputElement) ||
           !campo.matches('#inp_title, input[name="title"], #inp_hat, input[name="hat"], #inp_author, input[name="author"]') ||
           !reconhecer(campo.form)) return;
+      if (/^\/news\/add\/?$/.test(location.pathname) && validarRequisitosDaMateria(campo.form).valido) return;
       evento.preventDefault();
       evento.stopImmediatePropagation();
       if (evento.type === 'keydown' && !evento.repeat) {
