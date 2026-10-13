@@ -11,6 +11,7 @@ const { acompanharFotosAdicao } = require('./fotos-adicao');
 const { instalarBotaoLegenda } = require('./botao-legenda');
 const { instalarSugestoesChapeuCMS } = require('./sugestoes-chapeu-cms');
 const { validarRequisitosDaMateria, instalarProtecaoEnvioCMS } = require('./requisitos-materia');
+const { prepararImagensAgenciaBrasil } = require('./agencia-brasil-imagens');
 const { lerCategoriaAtual, podeGerarImagemRJ, gerarImagemRJ, gerarImagemPorSolicitacao, imagemEmGeracao } = require('./imagem-rj');
 
 const TITULO_LIMITE = 'Quanto foi o jogo Brasil x Japão hoje? Veja resultado dos gols';
@@ -193,6 +194,20 @@ async function enviarMateria(aba) {
   if (!await validarChapeuEFotoAntesDoEnvio(aba)) return false;
   if (!await enviar.isEnabled()) return false;
   if (!await formulario.evaluate(form => form.checkValidity())) return false;
+  // Altera somente imagens de identificação inequívocas no corpo, após a
+  // conferência independente de chapéu e imagem destacada.
+  let limpeza;
+  try {
+    limpeza = await prepararImagensAgenciaBrasil(aba);
+  } catch (erro) {
+    console.warn(`[AUTOXS] Agência Brasil: não foi possível conferir o corpo; revisão manual necessária. ${erro.message}`);
+    return false;
+  }
+  if (!limpeza.ok) {
+    console.warn(`[AUTOXS] Agência Brasil: ${limpeza.aviso}`);
+    return false;
+  }
+  if (limpeza.removidas) console.log(`[AUTOXS] Agência Brasil: ${limpeza.removidas} imagem(ns) de identificação removida(s) do corpo.`);
   const urlInicial = aba.url();
   const action = await formulario.evaluate(form => form.action);
   const mensagensAntes = await aba.locator('.alert-success, .toast-success, [role="status"]').allTextContents();
