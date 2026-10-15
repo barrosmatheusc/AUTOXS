@@ -3,12 +3,14 @@ const { pathToFileURL } = require('node:url');
 const { criarGrupoJanelas } = require('./janelas-trabalho');
 const { identificarMateriaComGemini } = require('./identificar-materia-gemini');
 const { criarCompartilhamento } = require('./compartilhar-materias');
+const { criarPainelProducao } = require('./painel-producao');
 
-async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao = criarGrupoJanelas(context)) {
+async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao = criarGrupoJanelas(context), historico = null, compartilhamentoExterno = null, buscadorLinks = null) {
   const painel = context.pages().find(p => p.url() === 'about:blank') || await context.newPage();
   const url = pathToFileURL(path.join(__dirname, 'painel-manual.html')).href;
   const urlAdicao = pathToFileURL(path.join(__dirname, 'adicionar-painel.html')).href;
-  const compartilhamento = criarCompartilhamento(context, criarGrupoJanelas(context));
+  const compartilhamento = compartilhamentoExterno || criarCompartilhamento(context, criarGrupoJanelas(context));
+  const producao = historico ? criarPainelProducao(context, historico, compartilhamento, buscadorLinks) : null;
   let emAndamento = false;
   let adicao = null;
   let abrindoAdicao = null;
@@ -79,7 +81,14 @@ async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao 
             };
             const resultado = await enviarAoSite(entrada,progresso);
             return {ok:true,...resultado};
-          } catch (erro) { return {ok:false,mensagem:erro.message || 'Não foi possível preencher a matéria.'}; }
+          } catch (erro) {
+            if (historico && entrada?.id && entrada?.campos) {
+              await historico.registrar({ operacao:'adicionar', chave:entrada.id,
+                titulo:entrada.campos.titulo || '', situacao:'erro' })
+                .catch(falha => console.warn('[AUTOXS] Histórico: ' + falha.message));
+            }
+            return {ok:false,mensagem:erro.message || 'Não foi possível preencher a matéria.'};
+          }
         });
       });
       await pagina.exposeBinding('voltarAoPainel', async ({ frame }) => {
@@ -108,6 +117,12 @@ async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao 
       await compartilhamento.abrir();
       return {ok:true};
     } catch (erro) { return {ok:false,mensagem:erro.message || 'Não foi possível abrir as matérias para compartilhamento.'}; }
+  });
+  await painel.exposeBinding('abrirPainelProducao', async ({ frame }, aba) => {
+    if (frame !== painel.mainFrame() || frame.url() !== url) return {ok:false,mensagem:'Abra o painel inicial.'};
+    if (!producao) return {ok:false,mensagem:'Histórico de produção indisponível nesta sessão.'};
+    try { await producao.abrir(aba); return {ok:true}; }
+    catch (erro) { return {ok:false,mensagem:erro.message || 'Não foi possível abrir a produção.'}; }
   });
   await painel.goto(url);
   await painel.bringToFront();

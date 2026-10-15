@@ -6,6 +6,9 @@ const { confirmarSalvamento, acompanharEnvioManual } = require('./acompanhar-env
 const { conferirCategoriaEsportes, mostrarConferenciaCategoria } = require('./conferir-esportes');
 const { selecionarPaginaListagem } = require('./pagina-listagem');
 const { criarEnvioAoSite } = require('./preencher-materia');
+const { criarHistoricoProducao } = require('./historico-producao');
+const { criarCompartilhamento } = require('./compartilhar-materias');
+const { criarBuscadorLinks } = require('./painel-producao');
 const { mostrarAjudaFotos } = require('./ajuda-fotos');
 const { acompanharFotosAdicao } = require('./fotos-adicao');
 const { instalarBotaoLegenda } = require('./botao-legenda');
@@ -762,6 +765,38 @@ async function executar() {
   const carregamentos = new WeakMap();
   const enviadas = new Set();
   const acompanhamentos = new WeakMap();
+  const materiasPorAba = new WeakMap();
+  const historico = criarHistoricoProducao();
+  await historico.limparExpirados();
+  const limpezaHistorico = setInterval(() => {
+    void historico.limparExpirados()
+      .catch(erro => console.warn('[AUTOXS] Limpeza do histórico: ' + erro.message));
+  }, 60 * 60 * 1000);
+  limpezaHistorico.unref?.();
+  const compartilhamento = criarCompartilhamento(context, criarGrupoJanelas(context));
+  const limiteConfigurado = Number(process.env.AUTOXS_LIMITE_PAGINAS_LINKS);
+  const buscadorLinks = criarBuscadorLinks(historico, compartilhamento, {
+    limitePaginas:Number.isInteger(limiteConfigurado) && limiteConfigurado > 0 ? limiteConfigurado : 10
+  });
+  async function registrarAtualizacao(materia, situacao, formaConclusao = null) {
+    if (!materia?.url) return;
+    try {
+      await historico.registrar({ operacao:'atualizar', chave:materia.url, urlCms:materia.url,
+        titulo:materia.titulo || '', situacao, formaConclusao });
+    } catch (erro) { console.warn('[AUTOXS] Histórico: ' + erro.message); }
+  }
+  async function registrarAdicao(evento) {
+    const situacao = evento.tipo === 'concluido' ? 'concluido' : evento.tipo === 'naoConfirmado' ? 'naoConfirmado' : 'aguardandoRevisao';
+    const registro = await historico.registrar({ operacao:'adicionar', chave:evento.id, titulo:evento.campos.titulo,
+      chapeu:evento.campos.chapeu, subtitulo:evento.campos.bigode, urlOriginal:evento.urlOriginal || '',
+      urlCms:evento.urlCms || '',
+      situacao, formaConclusao: situacao === 'concluido' ? 'manual' : null });
+    if (situacao === 'concluido' && !registro.urlOriginal) {
+      void buscadorLinks.procurar(registro.id)
+        .catch(erro => console.warn('[AUTOXS] Busca de link público: ' + erro.message));
+    }
+    return registro;
+  }
   // As abas pendentes continuam editáveis entre cliques no painel.
   await criarPainelManual(context, async (progresso, paginaEscolhida) => {
     if (paginaEscolhida !== 1 && paginaEscolhida !== 2) throw new Error('Escolha Página 1 ou Página 2 antes de atualizar.');
@@ -785,27 +820,43 @@ async function executar() {
     const materias = candidatas.filter(m => !enviadas.has(m.url));
     await progresso(`${materias.length} matérias elegíveis na página ${paginaEscolhida}.`);
     const resumo = await processarLote(materias, {
-      abrir: materia => obterOuAbrirMateria(janelaAtualizacao, page, materia, carregamentos),
+      abrir: async materia => {
+        try {
+          const aba = await obterOuAbrirMateria(janelaAtualizacao, page, materia, carregamentos);
+          materiasPorAba.set(aba, materia);
+          await registrarAtualizacao(materia, 'aguardandoRevisao');
+          return aba;
+        } catch (erro) { await registrarAtualizacao(materia, 'erro'); throw erro; }
+      },
       preparar: async aba => {
-        // Ao conferir novamente uma pendência, devolve o controle ao lote.
-        acompanhamentos.get(aba)?.();
-        acompanhamentos.delete(aba);
-        await prepararAbaMateria(aba, carregamentos);
-        await instalarFerramentasEditorais(aba);
+        try {
+          // Ao conferir novamente uma pendência, devolve o controle ao lote.
+          acompanhamentos.get(aba)?.();
+          acompanhamentos.delete(aba);
+          await prepararAbaMateria(aba, carregamentos);
+          await instalarFerramentasEditorais(aba);
+        } catch (erro) { await registrarAtualizacao(materiasPorAba.get(aba), 'erro'); throw erro; }
       },
       acompanhar: async (aba, materia) => {
         if (acompanhamentos.has(aba) || enviadas.has(materia.url)) return;
         const formulario = localizarCampoChapeu(aba).locator('xpath=ancestor::form[1]');
-        const parar = await acompanharEnvioManual(aba, formulario, () => {
+        const parar = await acompanharEnvioManual(aba, formulario, async () => {
+          await registrarAtualizacao(materia, 'concluido', 'manual');
           enviadas.add(materia.url);
           acompanhamentos.delete(aba);
         });
         if (parar) acompanhamentos.set(aba, parar);
       },
-      ler: lerPendencias,
+      ler: async aba => {
+        try { return await lerPendencias(aba); }
+        catch (erro) { await registrarAtualizacao(materiasPorAba.get(aba), 'erro'); throw erro; }
+      },
       enviar: async aba => {
         const url = aba.url();
-        const confirmado = await enviarMateria(aba);
+        let confirmado;
+        try { confirmado = await enviarMateria(aba); }
+        catch (erro) { await registrarAtualizacao(materiasPorAba.get(aba), 'erro'); throw erro; }
+        await registrarAtualizacao(materiasPorAba.get(aba), confirmado ? 'concluido' : 'naoConfirmado', confirmado ? 'automatico' : null);
         if (confirmado) enviadas.add(url);
         return confirmado;
       },
@@ -816,7 +867,7 @@ async function executar() {
     });
     console.log(`\nConferência concluída: ${resumo.enviadas} enviadas; ${resumo.pendentes} para conferir manualmente.`);
     return resumo;
-  }, criarEnvioAoSite(context, garantirLogin, async () => {}, () => janelaAdicao.newPage()), janelaAdicao);
+  }, criarEnvioAoSite(context, garantirLogin, async () => {}, () => janelaAdicao.newPage(), registrarAdicao), janelaAdicao, historico, compartilhamento, buscadorLinks);
   console.log('Clique em Atualizar no painel para iniciar uma rodada.');
 }
 

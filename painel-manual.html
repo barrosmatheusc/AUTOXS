@@ -7,7 +7,7 @@
 <style>
 :root { color-scheme: dark; font-family: "Segoe UI", Arial, sans-serif; background: #101817; color: #edf5f1; }
 * { box-sizing: border-box; }
-body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 32px 20px; background: radial-gradient(ellipse at 20% 0%, #23483a 0%, transparent 55%), #101817; }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 32px 20px 110px; background: radial-gradient(ellipse at 20% 0%, #23483a 0%, transparent 55%), #101817; }
 main { width: min(100%, 660px); }
 .brand { display: flex; align-items: center; gap: 10px; color: #b8c9c0; letter-spacing: .1em; font-size: 12px; font-weight: 600; text-transform: uppercase; margin-bottom: 24px; }
 .dot { height: 10px; width: 10px; border-radius: 50%; background: #87ddb2; }
@@ -31,6 +31,10 @@ button:disabled { background: #608871; color: #e9f2ed; cursor: wait; }
 .stat strong { display: block; font-size: 29px; font-weight: 600; margin-bottom: 5px; }
 .stat span { color: #bbcbc3; font-size: 13px; }
 footer { color: #91a79b; font-size: 13px; line-height: 1.65; padding: 22px 12px 0; text-align: center; }
+.atalhos-producao { position: fixed; right: 18px; bottom: 16px; z-index: 10; display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; max-width: calc(100vw - 36px); padding: 8px; border: 1px solid #456352; border-radius: 12px; background: #14251df2; box-shadow: 0 8px 25px #0006; }
+.atalhos-producao button { width: auto; margin: 0; padding: 9px 11px; background: #294337; border: 1px solid #719682; color: #d7f6e5; font-size: 13px; }
+.atalhos-producao button:hover:not(:disabled) { background: #315043; }
+@media(max-width: 600px) { body { padding-bottom: 32px; } .atalhos-producao { position: static; width: min(100%,660px); margin: 16px auto 0; justify-content: stretch; } .atalhos-producao button { flex: 1 1 140px; } }
 @media(max-width: 480px) { .card { padding: 28px 22px; } }
 </style>
 </head>
@@ -52,6 +56,7 @@ footer { color: #91a79b; font-size: 13px; line-height: 1.65; padding: 22px 12px 
   </section>
   <footer>Até 25 matérias por rodada · Somente acima da matéria do jogo Brasil x Japão<br>Busca de fotos por palavra-chave, com 100 resultados por página.</footer>
 </main>
+<nav class="atalhos-producao" aria-label="Produção e relatórios"><button type="button" data-producao="estatisticas">Estatísticas</button><button type="button" data-producao="compartilhaveis">Compartilháveis</button><button type="button" data-producao="relatorio">Relatório de Links</button></nav>
 <dialog id="escolher-pagina" class="materia-dialog" aria-labelledby="titulo-pagina">
   <header><h2 id="titulo-pagina">Qual página vamos atualizar?</h2><button id="cancelar-pagina" class="secundario fechar" type="button" aria-label="Cancelar escolha da página">×</button></header>
   <div class="miolo">
@@ -64,6 +69,14 @@ footer { color: #91a79b; font-size: 13px; line-height: 1.65; padding: 22px 12px 
 const botao = document.querySelector('#atualizar');
 const botaoAdicao = document.querySelector('#adicionar');
 const botaoCompartilhar = document.querySelector('#compartilhar');
+document.querySelectorAll('[data-producao]').forEach(b => b.addEventListener('click', async () => {
+  try {
+    b.disabled = true;
+    const resposta = await window.abrirPainelProducao(b.dataset.producao);
+    if (!resposta.ok) throw new Error(resposta.mensagem);
+  } catch (erro) { document.querySelector('#status').textContent = erro.message || 'Não foi possível abrir a produção.'; }
+  finally { b.disabled = false; }
+}));
 botaoCompartilhar.addEventListener('click', async () => {
   if (botaoCompartilhar.disabled) return;
   botaoCompartilhar.disabled = true;

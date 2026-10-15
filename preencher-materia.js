@@ -1,5 +1,6 @@
 const { textoParaHtml } = require('./texto-para-html');
 const ORIGEM = 'https://redacao.tribunaweb.com.br';
+const { acompanharPublicacaoAdicao } = require('./acompanhar-publicacao-adicao');
 const URL_ADICIONAR = ORIGEM + '/news/add';
 const normalizar = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 // Inputs do CMS têm uma linha; a revisão permite colar texto com quebras.
@@ -101,9 +102,10 @@ async function preencherCampos(aba, entrada) {
   if (campos.imagem.trim()) avisos.push('Imagem indicada na revisão: selecione o arquivo correspondente na Imagem de Destaque.');
   return { envioManual:true, categoria:categoriaSelecionada, avisos };
 }
-function criarEnvioIndividual(context, garantirLogin, prepararFotos, criarAba) {
+function criarEnvioIndividual(context, garantirLogin, prepararFotos, criarAba, aoEvento) {
   let abaAdicionar = null;
   let ultimoEnvio = null;
+  let pararAcompanhamento = null;
   async function obterAba() {
     if (!abaAdicionar || abaAdicionar.isClosed()) {
       abaAdicionar = await criarAba();
@@ -142,6 +144,8 @@ function criarEnvioIndividual(context, garantirLogin, prepararFotos, criarAba) {
     }
     const registro = {id,concluido:false,conteudo};
     ultimoEnvio = registro;
+    pararAcompanhamento?.();
+    pararAcompanhamento = null;
     await log(reutilizada ? 'Abrindo um novo formulário na mesma aba…' : 'Abrindo Adicionar no site…');
     // Reabre Adicionar para limpar também foto, categoria e demais dados da matéria anterior.
     await abrirFormulario(aba);
@@ -149,6 +153,14 @@ function criarEnvioIndividual(context, garantirLogin, prepararFotos, criarAba) {
     await log('Preenchendo os campos da matéria…');
     registro.resultado = await preencherCampos(aba,campos);
     registro.concluido = true;
+    if (aoEvento) {
+      try {
+        await aoEvento({ tipo:'preparado', id, campos });
+        pararAcompanhamento = await acompanharPublicacaoAdicao(aba, { id, campos }, aoEvento);
+      } catch (erro) {
+        registro.resultado.avisos.push('O histórico não pôde acompanhar esta publicação: ' + erro.message);
+      }
+    }
     await aba.evaluate(avisos => {
       const aviso=document.createElement('div'); aviso.id='autoxs-aviso-envio'; aviso.setAttribute('role','status');
       aviso.textContent='AUTOXS — Confira os campos e clique no botão de enviar do site quando quiser publicar a matéria.' + (avisos.length ? ' ' + avisos.join(' ') : '');
@@ -176,12 +188,12 @@ function criarEnvioIndividual(context, garantirLogin, prepararFotos, criarAba) {
   return enviar;
 }
 
-function criarEnvioAoSite(context, garantirLogin, prepararFotos = async () => {}, criarAba = () => context.newPage()) {
+function criarEnvioAoSite(context, garantirLogin, prepararFotos = async () => {}, criarAba = () => context.newPage(), aoEvento = null) {
   const espacos = new Map();
   function obterEspaco(numero) {
     if (!Number.isInteger(numero) || numero < 1 || numero > 4) throw new Error('Escolha um dos quatro espaços de adição.');
     if (!espacos.has(numero)) {
-      espacos.set(numero, criarEnvioIndividual(context, garantirLogin, prepararFotos, criarAba));
+      espacos.set(numero, criarEnvioIndividual(context, garantirLogin, prepararFotos, criarAba, aoEvento));
     }
     return espacos.get(numero);
   }

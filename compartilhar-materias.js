@@ -14,6 +14,85 @@ function limparTexto(valor) {
   return String(valor || '').replace(/\s+/g, ' ').trim();
 }
 
+function chaveTitulo(valor) {
+  return limparTexto(valor).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase('pt-BR').replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function encontrarLinkPorTitulo(titulo, candidatos) {
+  const chave = chaveTitulo(titulo);
+  if (chave.length < 12) return { url:'', motivo:'Título curto demais para associação automática.' };
+  const encontrados = new Set();
+  for (const candidato of candidatos || []) {
+    if (chaveTitulo(candidato?.titulo) === chave && pertenceAoSitePublico(candidato?.url)) {
+      encontrados.add(identidadeMateria(candidato.url));
+    }
+  }
+  encontrados.delete(null);
+  if (encontrados.size === 1) return { url:[...encontrados][0], motivo:'' };
+  return { url:'', motivo:encontrados.size > 1
+    ? 'Mais de uma matéria pública possui este título.'
+    : 'Título não encontrado na listagem pública consultada.' };
+}
+
+function numeroPaginaUltimas(valor) {
+  try {
+    const url = new URL(valor);
+    if (url.protocol !== 'https:' || !pertenceAoSitePublico(url)) return 0;
+    const caminho = url.pathname.replace(/\/$/, '');
+    if (caminho === '/noticias/ultimas') return 1;
+    const numero = /^\/noticias\/ultimas\/pagina-(\d+)$/.exec(caminho)?.[1];
+    return numero && Number(numero) >= 2 ? Number(numero) : 0;
+  } catch { return 0; }
+}
+
+function proximaPaginaUltimas(atual, hrefs) {
+  const numero = numeroPaginaUltimas(atual);
+  if (!numero) return '';
+  for (const href of hrefs || []) {
+    try {
+      const url = new URL(href, atual);
+      if (numeroPaginaUltimas(url.href) === numero + 1) return url.origin + url.pathname;
+    } catch { /* Link alheio à paginação. */ }
+  }
+  // Esta é a rota de paginação real do site. A navegação seguinte valida
+  // resposta, endereço e conteúdo antes de aceitá-la como uma nova página.
+  return new URL(`/noticias/ultimas/pagina-${numero + 1}`, atual).href;
+}
+
+async function percorrerPaginasUltimas({ limitePaginas = 10, sinal, progresso, abrirPrimeira, lerPagina, abrirProxima }) {
+  const limite = Number.isInteger(limitePaginas) && limitePaginas > 0 ? Math.min(limitePaginas, 100) : 10;
+  const candidatos = [];
+  let paginasVisitadas = 0, limiteAtingido = false, anterior = '';
+  try {
+    if (sinal?.aborted) return { candidatos:[], paginasVisitadas, cancelado:true, limiteAtingido:false };
+    await progresso?.('Procurando na página 1');
+    if (sinal?.aborted) return { candidatos:[], paginasVisitadas, cancelado:true, limiteAtingido:false };
+    await abrirPrimeira();
+    for (let numero = 1; numero <= limite; numero++) {
+      if (sinal?.aborted) break;
+      const pagina = await lerPagina();
+      if (sinal?.aborted || !pagina.candidatos?.length) break;
+      const assinatura = pagina.candidatos.map(item => item.url).sort().join('\n');
+      if (assinatura === anterior) break;
+      anterior = assinatura;
+      candidatos.push(...pagina.candidatos);
+      paginasVisitadas++;
+      const proxima = proximaPaginaUltimas(pagina.url, pagina.hrefs);
+      if (!proxima) break;
+      if (numero === limite) { limiteAtingido = true; break; }
+      if (sinal?.aborted) break;
+      await progresso?.(`Procurando na página ${numero + 1}`);
+      if (sinal?.aborted || !await abrirProxima(proxima, numero + 1)) break;
+    }
+    return { candidatos:sinal?.aborted ? [] : candidatos, paginasVisitadas,
+      cancelado:Boolean(sinal?.aborted), limiteAtingido };
+  } catch (erro) {
+    if (sinal?.aborted) return { candidatos:[], paginasVisitadas, cancelado:true, limiteAtingido:false };
+    throw erro;
+  }
+}
+
 function montarTextoCompartilhamento({ chapeu, titulo, subtitulo, url }) {
   const partes = [];
   if (limparTexto(chapeu)) partes.push(`*${limparTexto(chapeu)}*`);
@@ -35,7 +114,9 @@ function montarTextoFacebook({ chapeu, titulo, subtitulo, url }) {
 function identidadeMateria(url) {
   try {
     const destino = new URL(url, SITE_PUBLICO);
-    if (!['http:', 'https:'].includes(destino.protocol) || !pertenceAoSitePublico(destino)) return null;
+    if (!['http:', 'https:'].includes(destino.protocol) || destino.username || destino.password ||
+        !pertenceAoSitePublico(destino) ||
+        !/^\/[^/]+\/\d{4}\/\d{2}\/\d{2}\/\d+-[^/]+\/?$/i.test(destino.pathname)) return null;
     const caminho = destino.pathname.replace(/\/+$/, '');
     return `https://www.tribunadosertao.com.br${caminho}`;
   } catch { return null; }
@@ -159,7 +240,7 @@ function instalarInterfaceCompartilhamento() {
     return;
   }
 
-  const estado = { instalado:true, botaoAtual:null, timer:null, ultimaQuantidade:null, resultadoAtual:null, selecaoExterna:null };
+  const estado = { instalado:true, botaoAtual:null, timer:null, ultimaQuantidade:null, resultadoAtual:null, selecaoExterna:null, candidatos:[] };
   window.__autoxsCompartilhamento = estado;
   const estilo = document.createElement('style');
   estilo.dataset.autoxsCompartilhar = 'estilo';
@@ -681,6 +762,7 @@ function instalarInterfaceCompartilhamento() {
     const processadosPorRecipiente = new WeakMap();
     let detectadas = 0;
     let adicionados = 0;
+    const candidatosCompartilhamento = [];
     for (const ancora of candidatos) {
       const titulo = normalizar(ancora.textContent);
       if (titulo.length < 12 || !urlValida(ancora.href) || !ancora.getClientRects().length) continue;
@@ -697,6 +779,7 @@ function instalarInterfaceCompartilhamento() {
       if (urlsDoRecipiente.has(chave)) continue;
       urlsDoRecipiente.add(chave);
       detectadas += 1;
+      candidatosCompartilhamento.push({ url:chave, titulo:lerDadosDoLink(ancora, recipiente).titulo });
 
       const existente = [...recipiente.querySelectorAll('[data-autoxs-share="true"]')]
         .some(item => item.dataset.autoxsUrl === chave);
@@ -731,6 +814,7 @@ function instalarInterfaceCompartilhamento() {
       registrarResumo({ tipo:'resumo', detectadas, adicionados });
     }
     estado.ultimaQuantidade = detectadas;
+    estado.candidatos = candidatosCompartilhamento;
     return { detectadas, adicionados };
   }
   estado.garantirBotoesCompartilhar = garantirBotoesCompartilhar;
@@ -1202,7 +1286,45 @@ function criarCompartilhamento(context, janela) {
     catch (erro) { await listagem.close().catch(() => {}); listagem = null; throw erro; }
   }
 
+  async function consultarPaginas({ limitePaginas = 10, sinal, progresso } = {}) {
+    if (sinal?.aborted) return { candidatos:[], paginasVisitadas:0, cancelado:true, limiteAtingido:false };
+    const consulta = await janela.newPage();
+    const interromper = () => { if (!consulta.isClosed()) void consulta.close().catch(() => {}); };
+    sinal?.addEventListener('abort', interromper, { once:true });
+    try {
+      return await percorrerPaginasUltimas({ limitePaginas, sinal, progresso,
+        abrirPrimeira:() => prepararPaginaInicial(consulta),
+        lerPagina:async () => {
+          await consulta.waitForFunction(() => Boolean(window.__autoxsCompartilhamento?.candidatos?.length),
+            undefined, { timeout:10000 }).catch(() => {});
+          if (sinal?.aborted) return { url:consulta.url(), candidatos:[], hrefs:[] };
+          return consulta.evaluate(() => {
+            const interfaceCompartilhamento = window.__autoxsCompartilhamento;
+            if (!interfaceCompartilhamento?.garantirBotoesCompartilhar) return { url:location.href, candidatos:[], hrefs:[] };
+            interfaceCompartilhamento.garantirBotoesCompartilhar('consulta');
+            return { url:location.href, candidatos:interfaceCompartilhamento.candidatos || [],
+              hrefs:[...document.querySelectorAll('a[href]')].map(a => a.href) };
+          });
+        },
+        abrirProxima:async (proxima, numero) => {
+          const resposta = await consulta.goto(proxima, { waitUntil:'domcontentloaded', timeout:30000 });
+          return Boolean(resposta && resposta.status() < 400 && numeroPaginaUltimas(consulta.url()) === numero);
+        }
+      });
+    } finally {
+      sinal?.removeEventListener('abort', interromper);
+      await consulta.close().catch(() => {});
+      if (listagem && !listagem.isClosed()) await listagem.bringToFront().catch(() => {});
+    }
+  }
+
+  async function consultarCandidatos() {
+    return (await consultarPaginas({ limitePaginas:1 })).candidatos;
+  }
+
   return {
+    consultarCandidatos,
+    consultarPaginas,
     abrir: async () => {
       if (!abrindo) abrindo = abrir().finally(() => { abrindo = null; });
       return abrindo;
@@ -1210,4 +1332,5 @@ function criarCompartilhamento(context, janela) {
   };
 }
 
-module.exports = { criarCompartilhamento, montarTextoCompartilhamento, identidadeMateria };
+module.exports = { criarCompartilhamento, montarTextoCompartilhamento, identidadeMateria,
+  chaveTitulo, encontrarLinkPorTitulo, numeroPaginaUltimas, proximaPaginaUltimas, percorrerPaginasUltimas };
