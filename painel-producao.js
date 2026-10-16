@@ -104,7 +104,7 @@ async function recuperarLinksPendentes(historico, request) {
 }
 
 function criarBuscadorLinks(historico, compartilhamento, {
-  limitePaginas = 10, atrasoPublicacaoMs = 10000, tentativasPublicacao = 3, intervaloTentativaMs = 15000
+  limitePaginas = 10, atrasoPublicacaoMs = 3000, tentativasPublicacao = 3, intervaloTentativaMs = 15000
 } = {}) {
   const limite = Number.isInteger(limitePaginas) && limitePaginas > 0 ? Math.min(limitePaginas, 100) : 10;
   const ativas = new Map();
