@@ -176,6 +176,21 @@ test('figure com legenda ou conteúdo editorial adicional não é alterado autom
   } finally { await page.close(); }
 });
 
+test('HTML do formulário com logotipo divergente do editor impede o envio', async () => {
+  const corpoVisivel = '<p><strong>Notícia</strong> sem logotipo visível.</p>';
+  const corpoEnviado = `${corpoVisivel}${logoReal}`;
+  const page = await paginaComCorpo(corpoVisivel);
+  try {
+    await page.locator('#inp_text').evaluate((elemento, conteudo) => { elemento.value = conteudo; }, corpoEnviado);
+    const resultado = await prepararImagensAgenciaBrasil(page);
+    assert.equal(resultado.ok, false);
+    assert.match(resultado.aviso, /revisão manual/i);
+    assert.equal(await page.locator('.rx-editor').innerHTML(), corpoVisivel);
+    assert.equal(await page.locator('#inp_text').inputValue(), corpoEnviado);
+    assert.equal(await page.locator('#imagem-destaque').getAttribute('src'), '/destaque.jpg');
+  } finally { await page.close(); }
+});
+
 test('lote não tenta enviar se faltar chapéu ou imagem destacada', async () => {
   const materias = [1, 2, 3].map(id => ({ titulo: `Matéria ${id}`, url: `https://exemplo.test/${id}` }));
   const estados = [{ temChapeu: false, temImagem: true }, { temChapeu: true, temImagem: false }, { temChapeu: true, temImagem: true }];

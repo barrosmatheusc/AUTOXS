@@ -1,34 +1,29 @@
 const normalizar = texto => String(texto || '').normalize('NFD')
   .replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 
-// Sinais editoriais, não uma classificação infalível. Termos vagos como
-// estrela, espaço, receita e luta, isolados, não determinam outro assunto.
-const outrosAssuntos = [
-  ['astronomia', /\b(?:astronom(?:ia|os?|icas?|icos?)|astrofisica|nasa|telescopios?|exoplanetas?|asteroides?|meteoritos?|galaxias?|constelacoes|buracos? negros?|eclipse(?:s)? (?:solar|lunar)|sistema solar|estacao espacial|james webb|chuva de meteoros)\b/],
-  ['guerra ou conflito internacional', /\b(?:guerras?|bombardeios?|cessar[- ]fogo|invasao militar|conflito armado|ataque(?:s)? (?:aereo|aereos|militar|militares)|misseis|missil|tropas|refens|otan)\b/],
-  ['gastronomia', /\b(?:gastronomia|culinaria|restaurantes?|confeitaria|sobremesas?|ingredientes?|chefs? de cozinha|receita de (?:bolo|torta|pao|pudim|lasanha)|modo de preparo)\b/],
-  ['astrologia', /\b(?:astrolog(?:ia|os?|icas?|icos?)|horoscopos?|zodiaco|signos?|mapa astral|ascendente em|mercurio retrogrado|previsao astral)\b/],
-  ['arqueologia', /\b(?:arqueolog(?:ia|os?|icas?|icos?)|escavacoes|escavacao|sitios? arqueologicos?|artefatos?|foss(?:il|eis)|paleontolog(?:ia|os?)|dinossauros?|mumias?|tumbas?|civilizacoes antigas)\b/]
+// A revisão automática considera apenas os três assuntos excluídos da
+// publicação automática. A ausência de palavras esportivas não é um bloqueio.
+const assuntosRestritos = [
+  ['arqueologia', /\barqueolog(?:ia|ic[oa]s?|[oa]s?)\b/, /\barqueolog(?:ia|ic[oa]s?|[oa]s?)\b|\bsitios? arqueologicos?\b/],
+  ['astronomia', /\bastronom(?:ia|ic[oa]s?|[oa]s?)\b/, /\bastronom(?:ia|ic[oa]s?|[oa]s?)\b|\b(?:astrofisica|telescopios?|exoplanetas?|galaxias?|constelacoes?|asteroides?|eclipse(?:s)? (?:solar|lunar))\b/],
+  ['cultura', /\bcultura\b/, /(?:^cultura\b|\b(?:festival|mostra|agenda|programacao|evento|politica|patrimonio|projeto|edital|setor|centro)(?: de| da)? cultura\b|\b(?:festival|mostra|agenda|programacao|evento|politica|patrimonio|projeto|edital|setor|centro) cultur(?:al|ais)\b|\b(?:na|da|para a) cultura\b|\b(?:festival|mostra) (?:de )?(?:musica|cinema|teatro|danca|literatura)\b|\bexposicao (?:de )?(?:arte|fotografia)\b)/]
 ];
-const sinaisEsportivos = /\b(?:futebol|futsal|basquete|voleibol|volei|handebol|tenis|atletismo|natacao|ciclismo|ginastica|surfe|surf|skate|judo|jiu[- ]jitsu|boxe|mma|ufc|automobilismo|formula (?:1|um)|f1|motogp|olimpiadas|olimpic[oa]s?|paralimpic[oa]s?|brasileirao|libertadores|champions league|premier league|copa do (?:mundo|brasil)|nba|nfl|fifa|cbf|atletas?|jogador(?:a|es|as)?|goleir[oa]s?|atacantes?|zagueir[oa]s?|treinador(?:a|es|as)?|tecnico de futebol|gols?|penaltis?|artilheir[oa]s?|partida de|campeonato(?:s)? (?:brasileiro|paulista|carioca|alagoano|pernambucano))\b/;
 
 function conferirCategoriaEsportes({ categoria, titulo, chapeu }) {
-  if (!/^esportes?$/.test(normalizar(categoria))) return { revisar: false, mensagem: '' };
-  const texto = normalizar(titulo) + ' ' + normalizar(chapeu);
-  const assuntos = outrosAssuntos.filter(([, regra]) => regra.test(texto)).map(([nome]) => nome);
-  const temEsporte = sinaisEsportivos.test(texto);
-  if (assuntos.length) {
-    return {
-      revisar: true,
-      mensagem: 'Categoria a conferir: está em Esportes, mas o título ou chapéu indica ' +
-        assuntos.join(', ') + (temEsporte ? ' junto com referências esportivas.' : '.') +
-        ' Confira a categoria antes de enviar manualmente.'
-    };
-  }
-  if (!temEsporte || !normalizar(titulo)) {
-    return { revisar: true, mensagem: 'Categoria a conferir: não foi possível confirmar Esportes pelo título e chapéu. Confira antes de enviar manualmente.' };
-  }
-  return { revisar: false, mensagem: 'Categoria Esportes compatível com os termos do título e chapéu.' };
+  const categoriaNormalizada = normalizar(categoria);
+  const tituloNormalizado = normalizar(titulo);
+  const chapeuNormalizado = normalizar(chapeu);
+  const assuntos = assuntosRestritos
+    .filter(([, categoriaRestrita, tituloRestrito]) =>
+      categoriaRestrita.test(categoriaNormalizada) ||
+      categoriaRestrita.test(chapeuNormalizado) ||
+      tituloRestrito.test(tituloNormalizado))
+    .map(([nome]) => nome);
+  if (!assuntos.length) return { revisar: false, mensagem: '' };
+  return {
+    revisar: true,
+    mensagem: `Assunto a conferir: ${assuntos.join(', ')}. Não enviar automaticamente; revise a matéria e a categoria.`
+  };
 }
 
 async function mostrarConferenciaCategoria(aba, resultado) {

@@ -45,6 +45,19 @@ test('percorre páginas, anuncia progresso e respeita o limite configurado', asy
   assert.equal(resultado.limiteAtingido, true);
 });
 
+test('interrompe a paginação assim que encontra correspondência na primeira página', async () => {
+  let navegacoes = 0;
+  const resultado = await percorrerPaginasUltimas({ limitePaginas:10,
+    abrirPrimeira:async()=>{},
+    lerPagina:async()=>({ url:base, candidatos:[{titulo:'Matéria encontrada',url:link}], hrefs:[base+'/pagina-2'] }),
+    abrirProxima:async()=>{ navegacoes++; return true; },
+    pararQuando:candidatos=>candidatos.some(item=>item.url===link)
+  });
+  assert.equal(resultado.paginasVisitadas, 1);
+  assert.equal(resultado.encontrada, true);
+  assert.equal(navegacoes, 0);
+});
+
 test('encerra quando a próxima página não existe ou repete conteúdo', async () => {
   const primeira = { url:base, candidatos:[{titulo:'Uma',url:'u1'}], hrefs:[] };
   let leituras = 0;
@@ -123,5 +136,61 @@ test('títulos iguais em páginas diferentes permanecem pendentes', async () => 
     const registro = (await historico.consultar('2026-10-15')).compartilh.find(atual=>atual.id===item.id);
     assert.equal(registro.urlOriginal, '');
     assert.match(registro.motivoLinkPendente, /Mais de uma matéria/);
+  });
+});
+
+test('aguarda após publicação, tenta novamente e salva uma única URL', async () => {
+  await comHistorico(async historico => {
+    const item = await historico.registrar({ operacao:'adicionar', chave:'agendada',
+      titulo:'Papa apresenta boa recuperação após cirurgia e retoma trabalho',
+      situacao:'concluido', formaConclusao:'manual' });
+    let consultas = 0;
+    const compartilhamento = { consultarPaginas:async()=>{
+      consultas++;
+      return { candidatos:consultas===1 ? [] : [{ titulo:item.titulo,url:link }],
+        paginasVisitadas:1, limiteAtingido:false };
+    } };
+    const buscador = criarBuscadorLinks(historico, compartilhamento,
+      { atrasoPublicacaoMs:25, tentativasPublicacao:3, intervaloTentativaMs:5 });
+    const inicio = Date.now();
+    const procura = buscador.agendarAposPublicacao(item.id);
+    assert.equal(consultas, 0);
+    assert.deepEqual(await procura, {recuperadas:1,cancelado:false});
+    assert.ok(Date.now()-inicio >= 25);
+    assert.equal(consultas, 2);
+    assert.equal((await historico.consultar('2026-10-15')).compartilh.find(i=>i.id===item.id).urlOriginal, link);
+  });
+});
+
+test('cancelamento durante espera impede consulta e gravação', async () => {
+  await comHistorico(async historico => {
+    const item = await historico.registrar({ operacao:'adicionar', chave:'cancelada',
+      titulo:'Matéria que ainda aguarda publicação pública', situacao:'concluido', formaConclusao:'manual' });
+    let consultas = 0;
+    const buscador = criarBuscadorLinks(historico, { consultarPaginas:async()=>{ consultas++; } },
+      { atrasoPublicacaoMs:100, tentativasPublicacao:3, intervaloTentativaMs:5 });
+    const procura = buscador.agendarAposPublicacao(item.id);
+    assert.equal(buscador.cancelar(item.id), true);
+    assert.deepEqual(await procura, { recuperadas:0, cancelado:true });
+    assert.equal(consultas, 0);
+    assert.equal((await historico.consultar('2026-10-15')).compartilh.find(i=>i.id===item.id).urlOriginal, '');
+  });
+});
+
+test('cancelamento entre tentativas impede novas consultas', async () => {
+  await comHistorico(async historico => {
+    const item = await historico.registrar({ operacao:'adicionar', chave:'intervalo',
+      titulo:'Matéria ainda não disponível no site público', situacao:'concluido', formaConclusao:'manual' });
+    let consultas = 0;
+    const buscador = criarBuscadorLinks(historico, { consultarPaginas:async()=>{
+      consultas++;
+      return { candidatos:[], paginasVisitadas:1, limiteAtingido:false };
+    } }, { atrasoPublicacaoMs:1, tentativasPublicacao:3, intervaloTentativaMs:100 });
+    buscador.observar(evento => {
+      if (evento.mensagem.includes('Nova tentativa em')) buscador.cancelar(item.id);
+    });
+    const resultado = await buscador.agendarAposPublicacao(item.id);
+    assert.deepEqual(resultado, { recuperadas:0, cancelado:true });
+    assert.equal(consultas, 1);
   });
 });

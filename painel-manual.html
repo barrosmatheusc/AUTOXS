@@ -62,7 +62,8 @@ footer { color: #91a79b; font-size: 13px; line-height: 1.65; padding: 22px 12px 
   <div class="miolo">
     <p class="explicacao">Combine com a outra pessoa qual página cada um vai usar. Serão conferidas até 25 matérias da página escolhida, somente acima de “Quanto foi o jogo Brasil x Japão hoje? Veja resultado dos gols”. Essa matéria e as seguintes não serão abertas.</p>
     <div class="acoes"><button type="button" data-pagina="1">Página 1</button><button type="button" data-pagina="2">Página 2</button></div>
-    <p class="recado">A escolha não reserva as matérias. A composição das páginas pode mudar quando a fila é atualizada.</p>
+    <label><input id="atualizacao-visivel" type="checkbox"> Executar em modo Visível (o padrão é Execução Discreta)</label>
+    <p class="recado">A escolha não reserva as matérias. Na primeira abertura do Chrome discreto, o Windows pode ativar a janela; nas próximas rodadas ela será reutilizada.</p>
   </div>
 </dialog>
 <script>
@@ -105,17 +106,22 @@ botaoAdicao.addEventListener('click', async () => {
   }
 });
 const escolhaPagina = document.querySelector('#escolher-pagina');
-botao.addEventListener('click', () => { if (!botao.disabled && !escolhaPagina.open) escolhaPagina.showModal(); });
+botao.addEventListener('click', () => {
+  if (botao.disabled || escolhaPagina.open) return;
+  document.querySelector('#atualizacao-visivel').checked = false;
+  escolhaPagina.showModal();
+});
 document.querySelector('#cancelar-pagina').addEventListener('click', () => escolhaPagina.close());
 escolhaPagina.querySelectorAll('[data-pagina]').forEach(b => b.addEventListener('click', () => {
-  escolhaPagina.close(); void atualizarPagina(Number(b.dataset.pagina));
+  const modo = document.querySelector('#atualizacao-visivel').checked ? 'visivel' : 'discreto';
+  escolhaPagina.close(); void atualizarPagina(Number(b.dataset.pagina), modo);
 }));
 window.exibirProgresso = mensagem => {
   const texto = String(mensagem).trim();
   if (texto.startsWith('Matéria ')) document.querySelector('#materia').textContent = texto;
   else document.querySelector('#status').textContent = texto;
 };
-async function atualizarPagina(pagina) {
+async function atualizarPagina(pagina, modo = 'discreto') {
   if (botao.disabled) return;
   botao.disabled = true;
   botao.textContent = 'Atualizando…';
@@ -125,14 +131,18 @@ async function atualizarPagina(pagina) {
   document.querySelector('#materia').textContent = '';
   document.querySelector('#resumo').hidden = true;
   try {
-    const resultado = await window.atualizarMaterias(pagina);
+    const resultado = await window.atualizarMaterias({ pagina, modo });
     if (!resultado.ok) throw new Error(resultado.mensagem || 'Não foi possível concluir a conferência.');
     document.querySelector('#enviadas').textContent = resultado.resumo.enviadas;
     document.querySelector('#pendentes').textContent = resultado.resumo.pendentes;
     document.querySelector('#resumo').hidden = false;
     document.querySelector('#etapa').textContent = 'Página ' + pagina + ' · Rodada concluída';
     document.querySelector('#status').textContent = resultado.resumo.abertas
-      ? 'Confira as abas que ficaram abertas. Clique em Atualizar quando quiser conferir a fila novamente.'
+      ? (modo === 'visivel' ? 'Confira as abas que ficaram abertas. Clique em Atualizar quando quiser conferir a fila novamente.' :
+        modo === 'discreto' ? (resultado.resumo.pendentes
+          ? 'Confira as abas pendentes na janela do Chrome. Após revisar, envie pelo botão do CMS; a aba será fechada quando o envio for confirmado.'
+          : 'Rodada discreta concluída. Todas as matérias elegíveis foram conferidas.') :
+          'Rodada concluída.')
       : 'Nenhuma matéria nova na página ' + pagina + '. Você pode atualizar novamente quando quiser.';
   } catch (erro) {
     document.querySelector('#etapa').textContent = 'A conferência precisa de atenção';

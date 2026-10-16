@@ -22,22 +22,25 @@ async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao 
   };
   const espacoValido = numero => Number.isInteger(numero) && numero >= 1 && numero <= 4;
 
-  await painel.exposeBinding('atualizarMaterias', async ({ frame }, paginaEscolhida) => {
+  await painel.exposeBinding('atualizarMaterias', async ({ frame }, escolha) => {
+    const paginaEscolhida = typeof escolha === 'number' ? escolha : escolha?.pagina;
+    const modo = typeof escolha === 'number' ? 'discreto' : escolha?.modo;
     if (frame !== painel.mainFrame() || frame.url() !== url) return {ok:false,mensagem:'Abra o painel local para atualizar.'};
     if (emAndamento) return {ok:false,mensagem:'Uma conferência já está em andamento.'};
     if (paginaEscolhida !== 1 && paginaEscolhida !== 2) return {ok:false,mensagem:'Escolha Página 1 ou Página 2 antes de atualizar.'};
+    if (modo !== 'discreto' && modo !== 'visivel') return {ok:false,mensagem:'Modo de atualização inválido.'};
     emAndamento = true;
     try {
       const progresso = async mensagem => {
         if (!painel.isClosed()) await painel.evaluate(texto => window.exibirProgresso(texto), mensagem).catch(() => {});
       };
-      const resumo = await atualizar(progresso, paginaEscolhida);
+      const resumo = await atualizar(progresso, paginaEscolhida, modo);
       return {ok:!resumo.interrompido,resumo,mensagem:'A conferência foi interrompida.'};
     } catch (erro) {
       return {ok:false,mensagem:erro.message || 'Não foi possível concluir a conferência.'};
     } finally {
       emAndamento = false;
-      if (!painel.isClosed()) await painel.bringToFront().catch(() => {});
+      if (modo === 'visivel' && !painel.isClosed()) await painel.bringToFront().catch(() => {});
     }
   });
 

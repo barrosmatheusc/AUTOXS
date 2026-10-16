@@ -283,6 +283,33 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
         erros: registros.filter(item => ['erro', 'naoConfirmado'].includes(item.situacao)).length
       } };
   }
+  async function materiasPorResponsavel(data = dataLocal(agora())) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(data) || dataLocal(`${data}T12:00:00-03:00`) !== data) throw new Error('Escolha uma data válida.');
+    const estado = await ler(); // Mesma retenção de oito dias usada pelos outros painéis.
+    const unicos = new Map();
+    const publicados = estado.registros
+      .filter(item => item.operacao === 'adicionar' && item.situacao === 'concluido')
+      .sort((a, b) => String(b.atualizadoEm || b.concluidoEm).localeCompare(String(a.atualizadoEm || a.concluidoEm)));
+    for (const item of publicados) {
+      const url = urlPublica(item.urlOriginal);
+      const chave = url ? `url:${new URL(url).pathname.replace(/\/$/, '')}` : `id:${item.id}`;
+      if (!unicos.has(chave)) unicos.set(chave, item);
+    }
+    function contar(itens) {
+      const quantidades = new Map();
+      for (const item of itens) {
+        if (item.responsavelId && estado.responsaveis.some(pessoa => pessoa.id === item.responsavelId)) {
+          quantidades.set(item.responsavelId, (quantidades.get(item.responsavelId) || 0) + 1);
+        }
+      }
+      return { total: [...quantidades.values()].reduce((soma, quantidade) => soma + quantidade, 0),
+        grupos: estado.responsaveis.filter(pessoa => !pessoa.removido || quantidades.has(pessoa.id))
+          .map(pessoa => ({ id:pessoa.id, nome:pessoa.nome, quantidade:quantidades.get(pessoa.id) || 0 })) };
+    }
+    const atribuídos = [...unicos.values()];
+    return { data, dia:contar(atribuídos.filter(item => dataLocal(item.concluidoEm) === data)),
+      periodo:contar(atribuídos) };
+  }
   async function relatorio(data) {
     const consulta = await consultar(data);
     const grupos = consulta.responsaveis.map(responsavel => ({ responsavel, urls: [] }));
@@ -309,7 +336,7 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
   }
   return { registrar, responsavel, cadastrarResponsavel, editarResponsavel, removerResponsavel, definirUrl, pendentesRecuperaveis,
     definirUrlRecuperada, publicadas, definirUrlCompartilhamento, registrarMotivoLink,
-    observar, consultar, relatorio, compartilhavel, limparExpirados };
+    observar, consultar, materiasPorResponsavel, relatorio, compartilhavel, limparExpirados };
 }
 
 module.exports = { criarHistoricoProducao, urlPublica, dataLocal, RETENCAO_MS };

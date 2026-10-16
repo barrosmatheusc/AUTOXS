@@ -34,18 +34,57 @@ test('painel local mostra estatísticas, compartilháveis, responsáveis e relat
     await page.getByText('Matérias concluídas').waitFor();
     await page.getByRole('button', { name:'Seleção de Links', exact:true }).click();
     await page.getByRole('heading', { name:'Notícia' }).waitFor();
+    assert.equal(await page.locator('.materia-detalhes').isHidden(), false);
     await page.getByRole('group', { name:'Responsável por Notícia' }).getByRole('button', { name:'Vladimir' }).click();
-    await page.waitForFunction(() => document.querySelector('.responsaveis button')?.getAttribute('aria-pressed') === 'true');
+    await page.getByRole('button', { name:'Expandir Notícia' }).waitFor();
+    assert.equal(await page.locator('.materia-detalhes').isHidden(), true);
+    assert.match(await page.locator('.materia-cabecalho').innerText(), /Notícia\s+Vladimir/);
+    await page.getByRole('button', { name:'Expandir Notícia' }).click();
     assert.equal(await page.getByRole('group', { name:'Responsável por Notícia' }).getByRole('button', { name:'Vladimir' }).getAttribute('aria-pressed'), 'true');
+    await page.getByRole('button', { name:'Desfazer seleção' }).click();
+    await page.waitForFunction(() => document.querySelector('.materia-cabecalho')?.textContent?.trim() === 'Notícia');
+    assert.equal(await page.locator('.materia-detalhes').isHidden(), false);
+    await page.getByRole('group', { name:'Responsável por Notícia' }).getByRole('button', { name:'Cinara' }).click();
+    await page.getByRole('button', { name:'Expandir Notícia' }).waitFor();
+    assert.match(await page.locator('.materia-cabecalho').innerText(), /Cinara/);
+    await page.locator('#alternar-materias').click();
+    assert.equal(await page.locator('.materia-detalhes').isHidden(), false);
+    await page.locator('#alternar-materias').click();
+    assert.equal(await page.locator('.materia-detalhes').isHidden(), true);
     await page.getByRole('button', { name:'Relatório de Links', exact:true }).click();
     assert.match(await page.locator('#texto-relatorio').innerText(), /LINKS VLADIMIR/);
   } finally { await page.close(); }
+});
+
+test('container independente mostra dia e total de oito dias por responsável', async () => {
+  const pasta = await fs.mkdtemp(path.join(os.tmpdir(), 'autoxs-contagem-painel-'));
+  const arquivo = path.join(pasta, 'historico-autoxs.json');
+  const context = await browser.newContext();
+  const historico = criarHistoricoProducao(arquivo, () => new Date('2026-10-15T15:00:00.000Z'));
+  try {
+    const pessoa = await historico.cadastrarResponsavel('Email');
+    const item = await historico.registrar({ operacao:'adicionar', chave:'uma', titulo:'Notícia',
+      situacao:'concluido', formaConclusao:'manual' });
+    await historico.responsavel(item.id, pessoa.id);
+    const page = await criarPainelProducao(context, historico).abrir('estatisticas');
+    await page.locator('#data').fill('2026-10-15');
+    await page.locator('#data').dispatchEvent('change');
+    await page.waitForFunction(() => document.querySelector('#total-dia')?.textContent === '1');
+    assert.match(await page.locator('#contagem-dia').innerText(), /Email: 1 matéria/);
+    assert.equal(await page.locator('#total-periodo').innerText(), '1');
+    await page.getByRole('button', { name:'Seleção de Links' }).click();
+    assert.equal(await page.locator('#materias-responsavel').isHidden(), true);
+  } finally {
+    await context.close();
+    await fs.rm(pasta, { recursive:true, force:true });
+  }
 });
 
 test('atalhos do painel inicial abrem a produção sem substituir os controles principais', async () => {
   const context = await browser.newContext({ viewport:{ width:390, height:740 } });
   const historico = {
     consultar:async()=>({ estatisticas:{ concluidas:0, atualizacoesAutomaticas:0, finalizadasManualmente:0, adicionadas:0, aguardandoRevisao:0, erros:0 }, compartilh:[], responsaveis:[] }),
+    materiasPorResponsavel:async()=>({ dia:{total:0,grupos:[]}, periodo:{total:0,grupos:[]} }),
     relatorio:async()=>({ texto:'', semResponsavel:[], semUrl:[], duplicados:[] })
   };
   try {
@@ -101,6 +140,7 @@ test('Responsáveis inicia recolhido; expandir, cancelar e confirmar remoção p
     await page.waitForFunction(() => !document.querySelector('#gestao input[aria-label="Nome de Vladimir"]'));
     assert.equal(remocoes, 1);
     assert.match(await page.locator('#status').innerText(), /Vladimir removido/);
+    await page.getByRole('button', { name:'Expandir Notícia' }).click();
     assert.equal(await page.getByRole('group', { name:'Responsável por Notícia' })
       .getByRole('button', { name:'Vladimir' }).isDisabled(), true);
     await alternar.click();

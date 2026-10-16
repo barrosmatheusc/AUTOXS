@@ -68,6 +68,47 @@ test('responsável único pode ser escolhido, trocado, removido e recuperado do 
   });
 });
 
+test('matérias por responsável contam dia e oito dias sem duplicar URL nem seleção', async () => {
+  await comHistorico(async ({ historico, arquivo, avancar }) => {
+    const pessoa = await historico.cadastrarResponsavel('Email');
+    avancar('2026-10-14T15:00:00.000Z');
+    const primeira = await historico.registrar({ operacao:'adicionar', chave:'dia-1', titulo:'Primeira',
+      situacao:'concluido', formaConclusao:'manual', urlOriginal:url1 });
+    await historico.responsavel(primeira.id, pessoa.id);
+    await historico.responsavel(primeira.id, pessoa.id); // Desfaz a seleção.
+    assert.equal((await historico.materiasPorResponsavel('2026-10-14')).dia.total, 0);
+    await historico.responsavel(primeira.id, pessoa.id);
+    await historico.responsavel(primeira.id, 'inicial-1'); // Troca sem aumentar o total.
+    const segunda = await historico.registrar({ operacao:'adicionar', chave:'dia-1-outra', titulo:'Segunda',
+      situacao:'concluido', formaConclusao:'manual', urlOriginal:url2 });
+    await historico.responsavel(segunda.id, 'inicial-2');
+    let resumo = await historico.materiasPorResponsavel('2026-10-14');
+    assert.equal(resumo.dia.total, 2);
+    assert.equal(resumo.dia.grupos.find(grupo=>grupo.nome==='Vladimir').quantidade, 1);
+    assert.equal(resumo.dia.grupos.find(grupo=>grupo.nome==='Email').quantidade, 0);
+
+    avancar('2026-10-15T15:00:00.000Z');
+    const repetida = await historico.registrar({ operacao:'adicionar', chave:'dia-2-duplicada', titulo:'Cópia',
+      situacao:'concluido', formaConclusao:'manual', urlOriginal:url1.replace('www.', '')+'?utm_source=teste' });
+    const semUrl = await historico.registrar({ operacao:'adicionar', chave:'dia-2-sem-url', titulo:'Sem URL',
+      situacao:'concluido', formaConclusao:'manual' });
+    await historico.responsavel(repetida.id, pessoa.id);
+    await historico.responsavel(semUrl.id, pessoa.id);
+    resumo = await historico.materiasPorResponsavel('2026-10-15');
+    assert.equal(resumo.dia.total, 2);
+    assert.equal(resumo.periodo.total, 3); // A mesma URL em dois registros conta uma vez.
+    assert.equal(resumo.periodo.grupos.find(grupo=>grupo.nome==='Email').quantidade, 2);
+    assert.equal(resumo.periodo.grupos.find(grupo=>grupo.nome==='Cinara').quantidade, 1);
+    assert.equal((await historico.materiasPorResponsavel('2026-10-14')).dia.total, 1);
+
+    await historico.removerResponsavel(pessoa.id);
+    const reaberto = criarHistoricoProducao(arquivo, () => new Date('2026-10-15T15:00:00.000Z'));
+    assert.equal((await reaberto.materiasPorResponsavel('2026-10-15')).periodo.grupos.find(grupo=>grupo.nome==='Email').quantidade, 2);
+    avancar('2026-10-23T15:00:00.001Z');
+    assert.equal((await historico.materiasPorResponsavel('2026-10-15')).periodo.total, 0);
+  });
+});
+
 test('relatório separa dia e responsável, deduplica URLs e aponta pendências', async () => {
   await comHistorico(async ({ historico, avancar }) => {
     const a = await historico.registrar({ operacao:'adicionar', chave:'a', titulo:'Um', situacao:'concluido', formaConclusao:'manual', urlOriginal:url1 });

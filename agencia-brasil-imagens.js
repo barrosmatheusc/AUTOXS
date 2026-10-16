@@ -63,22 +63,28 @@ async function prepararImagensAgenciaBrasil(aba) {
     return { ok: false, removidas: 0, aviso: 'Editor da matéria não identificado; confira a imagem da Agência Brasil manualmente.' };
   }
   const fonteAberta = await fonte.isVisible();
+  // O HTML submetido pelo formulário pode estar defasado em relação ao editor.
+  // Confira as duas representações antes de considerar a limpeza concluída.
+  const campoTexto = aba.locator('#inp_text, textarea[name="text"]');
+  const htmlFormulario = await campoTexto.count() === 1 ? await campoTexto.inputValue() : '';
+  const formulario = htmlFormulario ? await aba.evaluate(analisarImagensAgenciaBrasil, htmlFormulario) : null;
+  if (formulario?.ambiguas.length) {
+    return { ok: false, removidas: 0, aviso: 'Imagem ambígua no HTML da matéria; revisão manual necessária.' };
+  }
   let previa = null;
   if (!fonteAberta) {
     previa = await aba.evaluate(analisarImagensAgenciaBrasil, await editor.innerHTML());
     if (previa.ambiguas.length) return { ok: false, removidas: 0, aviso: 'Imagem possivelmente ligada à Agência Brasil no corpo; revisão manual necessária.' };
-    // O campo do formulário pode conter HTML diferente do editor visual.
-    const campoTexto = aba.locator('#inp_text, textarea[name="text"]');
-    const htmlFormulario = await campoTexto.count() === 1 ? await campoTexto.inputValue() : '';
-    const formulario = htmlFormulario ? await aba.evaluate(analisarImagensAgenciaBrasil, htmlFormulario) : null;
-    if (formulario?.ambiguas.length) return { ok: false, removidas: 0, aviso: 'Imagem ambígua no HTML da matéria; revisão manual necessária.' };
+    if (formulario?.removidas && !previa.removidas) {
+      return { ok: false, removidas: 0, aviso: 'Logotipo presente no HTML do formulário, mas ausente no editor; revisão manual necessária.' };
+    }
     if (!previa.removidas && !formulario?.removidas) return { ok: true, removidas: 0 };
     await alternar.click();
     await fonte.waitFor({ state: 'visible' });
   }
   const original = await fonte.inputValue();
   const resultado = await aba.evaluate(analisarImagensAgenciaBrasil, original);
-  if (resultado.ambiguas.length || (previa?.removidas && !resultado.removidas)) {
+  if (resultado.ambiguas.length || ((previa?.removidas || formulario?.removidas) && !resultado.removidas)) {
     if (!fonteAberta) await alternar.click();
     return { ok: false, removidas: 0, aviso: 'Identificação da imagem não é consistente no editor HTML; revisão manual necessária.' };
   }
@@ -90,9 +96,8 @@ async function prepararImagensAgenciaBrasil(aba) {
   await alternar.click();
   await editor.waitFor({ state: 'visible' });
   const depois = await aba.evaluate(analisarImagensAgenciaBrasil, await editor.innerHTML());
-  const campoTexto = aba.locator('#inp_text, textarea[name="text"]');
-  const htmlFormulario = await campoTexto.count() === 1 ? await campoTexto.inputValue() : '';
-  const persistido = htmlFormulario ? await aba.evaluate(analisarImagensAgenciaBrasil, htmlFormulario) : null;
+  const htmlEnviado = await campoTexto.count() === 1 ? await campoTexto.inputValue() : '';
+  const persistido = htmlEnviado ? await aba.evaluate(analisarImagensAgenciaBrasil, htmlEnviado) : null;
   if (depois.removidas || depois.ambiguas.length || persistido?.removidas || persistido?.ambiguas.length) {
     return { ok: false, removidas: resultado.removidas, aviso: 'Não foi possível confirmar a limpeza no editor; revisão manual necessária.' };
   }

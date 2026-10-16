@@ -60,7 +60,7 @@ function proximaPaginaUltimas(atual, hrefs) {
   return new URL(`/noticias/ultimas/pagina-${numero + 1}`, atual).href;
 }
 
-async function percorrerPaginasUltimas({ limitePaginas = 10, sinal, progresso, abrirPrimeira, lerPagina, abrirProxima }) {
+async function percorrerPaginasUltimas({ limitePaginas = 10, sinal, progresso, abrirPrimeira, lerPagina, abrirProxima, pararQuando }) {
   const limite = Number.isInteger(limitePaginas) && limitePaginas > 0 ? Math.min(limitePaginas, 100) : 10;
   const candidatos = [];
   let paginasVisitadas = 0, limiteAtingido = false, anterior = '';
@@ -78,6 +78,9 @@ async function percorrerPaginasUltimas({ limitePaginas = 10, sinal, progresso, a
       anterior = assinatura;
       candidatos.push(...pagina.candidatos);
       paginasVisitadas++;
+      if (await pararQuando?.(pagina.candidatos, candidatos)) {
+        return { candidatos, paginasVisitadas, cancelado:false, limiteAtingido:false, encontrada:true };
+      }
       const proxima = proximaPaginaUltimas(pagina.url, pagina.hrefs);
       if (!proxima) break;
       if (numero === limite) { limiteAtingido = true; break; }
@@ -831,9 +834,37 @@ function criarCompartilhamento(context, janela) {
   let listagem = null;
   let abrindo = null;
   let capturaPendente = null;
+  let navegadorConsulta = null;
+  let contextoConsulta = null;
+  let iniciandoConsulta = null;
+  const paginasConsulta = new Set();
   const materias = new Map();
   const paginasVinculadas = new WeakSet();
   const navegacoesIniciais = new WeakSet();
+
+  async function obterContextoConsulta() {
+    if (contextoConsulta && navegadorConsulta?.isConnected()) return contextoConsulta;
+    if (!iniciandoConsulta) iniciandoConsulta = (async () => {
+      const { chromium } = require('playwright');
+      const browser = await chromium.launch({ headless:true });
+      try {
+        const novoContexto = await browser.newContext();
+        navegadorConsulta = browser;
+        contextoConsulta = novoContexto;
+        return novoContexto;
+      } catch (erro) { await browser.close().catch(() => {}); throw erro; }
+    })().finally(() => { iniciandoConsulta = null; });
+    return iniciandoConsulta;
+  }
+
+  async function fecharConsultas() {
+    for (const pagina of paginasConsulta) await pagina.close().catch(() => {});
+    paginasConsulta.clear();
+    await iniciandoConsulta?.catch(() => {});
+    await navegadorConsulta?.close().catch(() => {});
+    navegadorConsulta = null;
+    contextoConsulta = null;
+  }
 
   async function vincularPagina(pagina) {
     if (paginasVinculadas.has(pagina)) return;
@@ -1286,13 +1317,16 @@ function criarCompartilhamento(context, janela) {
     catch (erro) { await listagem.close().catch(() => {}); listagem = null; throw erro; }
   }
 
-  async function consultarPaginas({ limitePaginas = 10, sinal, progresso } = {}) {
+  async function consultarPaginas({ limitePaginas = 10, sinal, progresso, pararQuando } = {}) {
     if (sinal?.aborted) return { candidatos:[], paginasVisitadas:0, cancelado:true, limiteAtingido:false };
-    const consulta = await janela.newPage();
+    const contexto = await obterContextoConsulta();
+    if (sinal?.aborted) return { candidatos:[], paginasVisitadas:0, cancelado:true, limiteAtingido:false };
+    const consulta = await contexto.newPage();
+    paginasConsulta.add(consulta);
     const interromper = () => { if (!consulta.isClosed()) void consulta.close().catch(() => {}); };
     sinal?.addEventListener('abort', interromper, { once:true });
     try {
-      return await percorrerPaginasUltimas({ limitePaginas, sinal, progresso,
+      return await percorrerPaginasUltimas({ limitePaginas, sinal, progresso, pararQuando,
         abrirPrimeira:() => prepararPaginaInicial(consulta),
         lerPagina:async () => {
           await consulta.waitForFunction(() => Boolean(window.__autoxsCompartilhamento?.candidatos?.length),
@@ -1314,7 +1348,7 @@ function criarCompartilhamento(context, janela) {
     } finally {
       sinal?.removeEventListener('abort', interromper);
       await consulta.close().catch(() => {});
-      if (listagem && !listagem.isClosed()) await listagem.bringToFront().catch(() => {});
+      paginasConsulta.delete(consulta);
     }
   }
 
@@ -1325,6 +1359,7 @@ function criarCompartilhamento(context, janela) {
   return {
     consultarCandidatos,
     consultarPaginas,
+    fecharConsultas,
     abrir: async () => {
       if (!abrindo) abrindo = abrir().finally(() => { abrindo = null; });
       return abrindo;

@@ -14,10 +14,22 @@ async function recuperarLinksPorCompartilhamento(historico, compartilhamento, al
   const publicadas = await historico.publicadas();
   const pendentes = publicadas.filter(item => !item.urlOriginal && (!alvoId || item.id === alvoId));
   if (!pendentes.length || sinal?.aborted) return 0;
+  const urlsOcupadas = new Set(publicadas.map(item => item.urlOriginal).filter(Boolean));
+  const alvoUnico = pendentes.length === 1 &&
+    !publicadas.some(outro => outro.id !== pendentes[0].id &&
+      chaveTitulo(outro.titulo) === chaveTitulo(pendentes[0].titulo)) ? pendentes[0] : null;
+  const pararQuando = alvoUnico ? candidatos => {
+    const encontrado = encontrarLinkPorTitulo(alvoUnico.titulo, candidatos);
+    if (!encontrado.url || urlsOcupadas.has(encontrado.url)) return false;
+    const diaPublico = Date.parse(dataDaUrl(encontrado.url) + 'T12:00:00Z');
+    const conclusao = new Date(alvoUnico.concluidoEm).getTime();
+    return Number.isFinite(diaPublico) && Number.isFinite(conclusao) &&
+      Math.abs(diaPublico - conclusao) <= 36 * 60 * 60 * 1000;
+  } : null;
   let busca;
   try {
     busca = compartilhamento.consultarPaginas
-      ? await compartilhamento.consultarPaginas({ limitePaginas, sinal, progresso })
+      ? await compartilhamento.consultarPaginas({ limitePaginas, sinal, progresso, pararQuando })
       : { candidatos:await compartilhamento.consultarCandidatos(), paginasVisitadas:1, limiteAtingido:false };
   }
   catch (erro) {
@@ -29,7 +41,6 @@ async function recuperarLinksPorCompartilhamento(historico, compartilhamento, al
   }
   if (sinal?.aborted || busca.cancelado) return 0;
   const candidatos = busca.candidatos;
-  const urlsOcupadas = new Set(publicadas.map(item => item.urlOriginal).filter(Boolean));
   let recuperadas = 0;
   for (const item of pendentes) {
     if (sinal?.aborted) return recuperadas;
@@ -92,7 +103,9 @@ async function recuperarLinksPendentes(historico, request) {
   return recuperadas;
 }
 
-function criarBuscadorLinks(historico, compartilhamento, { limitePaginas = 10 } = {}) {
+function criarBuscadorLinks(historico, compartilhamento, {
+  limitePaginas = 10, atrasoPublicacaoMs = 10000, tentativasPublicacao = 3, intervaloTentativaMs = 15000
+} = {}) {
   const limite = Number.isInteger(limitePaginas) && limitePaginas > 0 ? Math.min(limitePaginas, 100) : 10;
   const ativas = new Map();
   const ouvintes = new Set();
@@ -103,23 +116,54 @@ function criarBuscadorLinks(historico, compartilhamento, { limitePaginas = 10 } 
       try { ouvinte({ id, mensagem, estado }); } catch { /* A interface não interrompe a procura. */ }
     }
   }
-  function procurar(id) {
+  function aguardar(ms, sinal) {
+    if (sinal.aborted) return Promise.resolve(false);
+    return new Promise(resolve => {
+      const concluir = resultado => { clearTimeout(timer); sinal.removeEventListener('abort', interromper); resolve(resultado); };
+      const interromper = () => concluir(false);
+      const timer = setTimeout(() => concluir(true), ms);
+      sinal.addEventListener('abort', interromper, { once:true });
+    });
+  }
+  function iniciar(id, { atrasoMs = 0, tentativas = 1, intervaloMs = 0 } = {}) {
     if (ativas.has(id)) throw new Error('A procura desta matéria já está em andamento.');
     const controlador = new AbortController();
+    const tarefa = { controlador, promessa:null, mensagem:atrasoMs ? `Aguardando ${atrasoMs / 1000} segundos após a publicação…` : 'Procurando na página 1' };
+    ativas.set(id, tarefa);
     const promessa = (async () => {
-      avisar(id, 'Procurando na página 1', 'procurando');
-      const recuperadas = await recuperarLinksPorCompartilhamento(historico, compartilhamento, id, {
-        sinal:controlador.signal, limitePaginas:limite,
-        progresso:mensagem => avisar(id, mensagem, 'procurando')
-      });
-      return { recuperadas, cancelado:controlador.signal.aborted };
+      if (atrasoMs) {
+        avisar(id, tarefa.mensagem, 'procurando');
+        if (!await aguardar(atrasoMs, controlador.signal)) return { recuperadas:0, cancelado:true };
+      }
+      for (let tentativa = 1; tentativa <= tentativas; tentativa++) {
+        if (controlador.signal.aborted) break;
+        const pendente = (await historico.publicadas()).find(item => item.id === id && !item.urlOriginal);
+        if (!pendente) break;
+        if (tentativas > 1) avisar(id, `Tentativa ${tentativa}/${tentativas}: procurando na página 1`, 'procurando');
+        else avisar(id, 'Procurando na página 1', 'procurando');
+        const recuperadas = await recuperarLinksPorCompartilhamento(historico, compartilhamento, id, {
+          sinal:controlador.signal, limitePaginas:limite,
+          progresso:mensagem => avisar(id, mensagem, 'procurando')
+        });
+        if (recuperadas || controlador.signal.aborted) return { recuperadas, cancelado:controlador.signal.aborted };
+        if (tentativa < tentativas) {
+          avisar(id, `Link ainda indisponível. Nova tentativa em ${intervaloMs / 1000} segundos…`, 'procurando');
+          if (!await aguardar(intervaloMs, controlador.signal)) break;
+        }
+      }
+      return { recuperadas:0, cancelado:controlador.signal.aborted };
     })().finally(() => {
       const cancelado = controlador.signal.aborted;
       ativas.delete(id);
       avisar(id, cancelado ? 'Procura cancelada.' : 'Procura concluída.', cancelado ? 'cancelado' : 'concluido');
     });
-    ativas.set(id, { controlador, promessa, mensagem:'Procurando na página 1' });
+    tarefa.promessa = promessa;
     return promessa;
+  }
+  function procurar(id) { return iniciar(id); }
+  function agendarAposPublicacao(id) {
+    if (ativas.has(id)) return ativas.get(id).promessa;
+    return iniciar(id, { atrasoMs:atrasoPublicacaoMs, tentativas:tentativasPublicacao, intervaloMs:intervaloTentativaMs });
   }
   function cancelar(id) {
     const busca = ativas.get(id);
@@ -128,6 +172,7 @@ function criarBuscadorLinks(historico, compartilhamento, { limitePaginas = 10 } 
     avisar(id, 'Cancelando procura…', 'cancelando');
     return true;
   }
+  function cancelarTodas() { for (const id of ativas.keys()) cancelar(id); }
   async function procurarPendentes() {
     if (!historico.publicadas) return;
     for (const item of await historico.publicadas()) {
@@ -137,7 +182,7 @@ function criarBuscadorLinks(historico, compartilhamento, { limitePaginas = 10 } 
     }
   }
   function observar(ouvinte) { ouvintes.add(ouvinte); return () => ouvintes.delete(ouvinte); }
-  return { procurar, cancelar, procurarPendentes, observar,
+  return { procurar, agendarAposPublicacao, cancelar, cancelarTodas, procurarPendentes, observar,
     ativas:() => [...ativas].map(([id, valor]) => ({ id, mensagem:valor.mensagem })) };
 }
 
@@ -170,6 +215,7 @@ function criarPainelProducao(context, historico, compartilhamento = null, buscad
             let resultado;
             switch (entrada.acao) {
               case 'consultar': resultado = await historico.consultar(entrada.data); break;
+              case 'materiasPorResponsavel': resultado = await historico.materiasPorResponsavel(entrada.data); break;
               case 'relatorio': resultado = await historico.relatorio(entrada.data); break;
               case 'responsavel': resultado = await historico.responsavel(entrada.id, entrada.responsavelId ?? null); break;
               case 'cadastrar': resultado = await historico.cadastrarResponsavel(entrada.nome); break;

@@ -1,6 +1,7 @@
 const path = require('node:path');
 const { extrairTermoBusca } = require('./termo-busca');
 const { criarPainelManual } = require('./painel-manual');
+const { criarSessaoAtualizacaoDiscreta } = require('./sessao-atualizacao-discreta');
 const { criarGrupoJanelas } = require('./janelas-trabalho');
 const { confirmarSalvamento, acompanharEnvioManual } = require('./acompanhar-envio');
 const { conferirCategoriaEsportes, mostrarConferenciaCategoria } = require('./conferir-esportes');
@@ -175,17 +176,17 @@ async function mostrarAvisoMateriaIncompleta(aba) {
   await aba.waitForTimeout(1050);
 }
 
-async function validarChapeuEFotoAntesDoEnvio(aba) {
+async function validarChapeuEFotoAntesDoEnvio(aba, mostrarAviso = true) {
   const campo = localizarCampoChapeu(aba);
   if (await campo.count() !== 1 || !(await campo.inputValue()).trim()) {
-    await mostrarAvisoMateriaIncompleta(aba);
+    if (mostrarAviso) await mostrarAvisoMateriaIncompleta(aba);
     return false;
   }
   const imagem = await verificarImagemDestaque(aba);
   return imagem.temImagem === true;
 }
 
-async function enviarMateria(aba) {
+async function enviarMateria(aba, mostrarAviso = true) {
   // Usa o formulário do chapéu, evitando o Enviar do login ou de um modal.
   const campo = localizarCampoChapeu(aba);
   const formulario = campo.locator('xpath=ancestor::form[1]');
@@ -194,7 +195,7 @@ async function enviarMateria(aba) {
   const enviar = formulario.getByRole('button', { name: /^[^\p{L}\p{N}]*(?:enviar|salvar|atualizar)(?:\s+mat[eé]ria)?[^\p{L}\p{N}]*$/iu }).filter({ visible: true });
   if (await enviar.count() !== 1) throw new Error('Botão Enviar/Salvar/Atualizar ausente ou ambíguo no formulário da matéria.');
   // Última proteção antes do envio real: exige chapéu e foto, sem popup para foto ausente.
-  if (!await validarChapeuEFotoAntesDoEnvio(aba)) return false;
+  if (!await validarChapeuEFotoAntesDoEnvio(aba, mostrarAviso)) return false;
   if (!await enviar.isEnabled()) return false;
   if (!await formulario.evaluate(form => form.checkValidity())) return false;
   // Altera somente imagens de identificação inequívocas no corpo, após a
@@ -389,26 +390,26 @@ async function processarLote(materias, operacoes) {
 }
 // Dispara a navegação e mantém a listagem em primeiro plano, como Ctrl+clique.
 // O carregamento de uma matéria nunca bloqueia a abertura da próxima aba.
-async function abrirMateriaEmSegundoPlano(context, listagem, materia, carregamentos) {
+async function abrirMateriaEmSegundoPlano(context, listagem, materia, carregamentos, trazerParaFrente = true) {
   const aba = await context.newPage();
   const carregamento = aba.goto(materia.url, { waitUntil: 'domcontentloaded' })
     .then(() => ({ erro: null }), erro => ({ erro }));
   // Captura falhas imediatamente, inclusive enquanto outras abas estão abrindo.
   carregamentos.set(aba, carregamento);
-  await listagem.bringToFront();
+  if (trazerParaFrente) await listagem.bringToFront();
   return aba;
 }
 
-async function obterOuAbrirMateria(context, listagem, materia, carregamentos) {
+async function obterOuAbrirMateria(context, listagem, materia, carregamentos, trazerParaFrente = true) {
   const existente = context.pages().find(aba => aba !== listagem && !aba.isClosed() && aba.url() === materia.url);
   if (existente) {
     if (!carregamentos.has(existente)) carregamentos.set(existente, Promise.resolve({ erro: null }));
     return existente;
   }
-  return abrirMateriaEmSegundoPlano(context, listagem, materia, carregamentos);
+  return abrirMateriaEmSegundoPlano(context, listagem, materia, carregamentos, trazerParaFrente);
 }
-async function prepararAbaMateria(aba, carregamentos) {
-  await aba.bringToFront();
+async function prepararAbaMateria(aba, carregamentos, trazerParaFrente = true) {
+  if (trazerParaFrente) await aba.bringToFront();
   const carregamento = carregamentos.get(aba);
   if (!carregamento) throw new Error('Carregamento da matéria não identificado.');
   const { erro } = await carregamento;
@@ -478,16 +479,25 @@ async function executar() {
     headless: false, viewport: null
   });
   const instalarFerramentasEditorais = acompanharFerramentasEditorais(context);
+  const sessaoDiscreta = criarSessaoAtualizacaoDiscreta(chromium, path.join(__dirname, 'perfil-atualizacao-discreta'));
+  const instaladoresDiscretos = new WeakMap();
   let encerramentoAutoXS = null;
+  let encerrarBuscas = async () => {};
   const encerrarAutoXS = () => {
     if (encerramentoAutoXS) return encerramentoAutoXS;
     encerramentoAutoXS = (async () => {
+      await encerrarBuscas();
+      await sessaoDiscreta.encerrar();
       await context.close().catch(() => {});
     })();
     return encerramentoAutoXS;
   };
   process.once('SIGINT', () => { void encerrarAutoXS(); });
   process.once('SIGTERM', () => { void encerrarAutoXS(); });
+  context.on('close', () => {
+    void encerrarBuscas();
+    void sessaoDiscreta.encerrar();
+  });
   // Preserva eventuais abas de matérias abertas em uma execução anterior.
   const janelaAtualizacao = criarGrupoJanelas(context);
   const janelaAdicao = criarGrupoJanelas(context);
@@ -593,7 +603,7 @@ async function executar() {
 
     return true;
   }
-  async function abrirListagem() {
+  async function abrirListagem(page) {
 
     console.log('');
     console.log(
@@ -658,7 +668,7 @@ async function executar() {
 
     return true;
   }
-  async function aplicarFiltro() {
+  async function aplicarFiltro(page) {
 
     const filtro =
       page.locator(
@@ -778,6 +788,10 @@ async function executar() {
   const buscadorLinks = criarBuscadorLinks(historico, compartilhamento, {
     limitePaginas:Number.isInteger(limiteConfigurado) && limiteConfigurado > 0 ? limiteConfigurado : 10
   });
+  encerrarBuscas = async () => {
+    buscadorLinks.cancelarTodas();
+    await compartilhamento.fecharConsultas();
+  };
   async function registrarAtualizacao(materia, situacao, formaConclusao = null) {
     if (!materia?.url) return;
     try {
@@ -792,29 +806,47 @@ async function executar() {
       urlCms:evento.urlCms || '',
       situacao, formaConclusao: situacao === 'concluido' ? 'manual' : null });
     if (situacao === 'concluido' && !registro.urlOriginal) {
-      void buscadorLinks.procurar(registro.id)
+      void buscadorLinks.agendarAposPublicacao(registro.id)
         .catch(erro => console.warn('[AUTOXS] Busca de link público: ' + erro.message));
     }
     return registro;
   }
   // As abas pendentes continuam editáveis entre cliques no painel.
-  await criarPainelManual(context, async (progresso, paginaEscolhida) => {
+  await criarPainelManual(context, async (progresso, paginaEscolhida, modo = 'discreto') => {
     if (paginaEscolhida !== 1 && paginaEscolhida !== 2) throw new Error('Escolha Página 1 ou Página 2 antes de atualizar.');
-    if (!page || page.isClosed()) page = await janelaAtualizacao.newPage();
+    const discreto = modo === 'discreto';
+    const trazerParaFrente = modo === 'visivel';
+    let contextoTrabalho = context;
+    let paginaTrabalho;
+    if (discreto) {
+      contextoTrabalho = await sessaoDiscreta.obterContexto();
+      if (!instaladoresDiscretos.has(contextoTrabalho)) {
+        instaladoresDiscretos.set(contextoTrabalho, acompanharFerramentasEditorais(contextoTrabalho));
+      }
+      paginaTrabalho = await sessaoDiscreta.obterListagem();
+    } else {
+      if (!page || page.isClosed()) page = await janelaAtualizacao.newPage();
+      paginaTrabalho = page;
+    }
+    const grupoTrabalho = trazerParaFrente ? janelaAtualizacao : contextoTrabalho;
     await progresso('Atualizando a fila…');
-    if (!await abrirListagem() || !await aplicarFiltro()) throw new Error('Não foi possível preparar a fila.');
+    if (!await abrirListagem(paginaTrabalho) || !await aplicarFiltro(paginaTrabalho)) {
+      throw new Error(discreto
+        ? 'Não foi possível acessar a fila no modo discreto. Confira a janela do Chrome pela barra de tarefas, inclusive o login do CMS.'
+        : 'Não foi possível preparar a fila.');
+    }
     // Antes de ir à página 2, confere se o ponto de parada já está na página 1.
-    await selecionarPaginaListagem(page, 1);
+    await selecionarPaginaListagem(paginaTrabalho, 1);
     const estadoPrimeira = {};
-    let candidatas = await coletarMaterias(page, estadoPrimeira);
+    let candidatas = await coletarMaterias(paginaTrabalho, estadoPrimeira);
     if (paginaEscolhida === 2) {
       if (estadoPrimeira.limiteEncontrado) {
         candidatas = [];
         await progresso('A matéria do jogo do Brasil já está na página 1. A página 2 fica abaixo do limite.');
       } else {
         await progresso('Selecionando a página 2…');
-        await selecionarPaginaListagem(page, 2);
-        candidatas = await coletarMaterias(page);
+        await selecionarPaginaListagem(paginaTrabalho, 2);
+        candidatas = await coletarMaterias(paginaTrabalho);
       }
     }
     const materias = candidatas.filter(m => !enviadas.has(m.url));
@@ -822,7 +854,7 @@ async function executar() {
     const resumo = await processarLote(materias, {
       abrir: async materia => {
         try {
-          const aba = await obterOuAbrirMateria(janelaAtualizacao, page, materia, carregamentos);
+          const aba = await obterOuAbrirMateria(grupoTrabalho, paginaTrabalho, materia, carregamentos, trazerParaFrente);
           materiasPorAba.set(aba, materia);
           await registrarAtualizacao(materia, 'aguardandoRevisao');
           return aba;
@@ -833,8 +865,9 @@ async function executar() {
           // Ao conferir novamente uma pendência, devolve o controle ao lote.
           acompanhamentos.get(aba)?.();
           acompanhamentos.delete(aba);
-          await prepararAbaMateria(aba, carregamentos);
-          await instalarFerramentasEditorais(aba);
+          await prepararAbaMateria(aba, carregamentos, trazerParaFrente);
+          if (discreto) await instaladoresDiscretos.get(contextoTrabalho)(aba);
+          else await instalarFerramentasEditorais(aba);
         } catch (erro) { await registrarAtualizacao(materiasPorAba.get(aba), 'erro'); throw erro; }
       },
       acompanhar: async (aba, materia) => {
@@ -854,7 +887,7 @@ async function executar() {
       enviar: async aba => {
         const url = aba.url();
         let confirmado;
-        try { confirmado = await enviarMateria(aba); }
+        try { confirmado = await enviarMateria(aba, trazerParaFrente); }
         catch (erro) { await registrarAtualizacao(materiasPorAba.get(aba), 'erro'); throw erro; }
         await registrarAtualizacao(materiasPorAba.get(aba), confirmado ? 'concluido' : 'naoConfirmado', confirmado ? 'automatico' : null);
         if (confirmado) enviadas.add(url);
@@ -862,12 +895,13 @@ async function executar() {
       },
       pesquisar: abrirPesquisaImagem,
       gerarImagem: (aba, log = progresso) => gerarImagemRJ(aba, verificarImagemDestaque, log),
-      ativo: () => context.pages().length > 0,
+      ativo: () => contextoTrabalho.pages().length > 0,
       log: async mensagem => { console.log(mensagem); await progresso(mensagem); }
     });
     console.log(`\nConferência concluída: ${resumo.enviadas} enviadas; ${resumo.pendentes} para conferir manualmente.`);
     return resumo;
-  }, criarEnvioAoSite(context, garantirLogin, async () => {}, () => janelaAdicao.newPage(), registrarAdicao), janelaAdicao, historico, compartilhamento, buscadorLinks);
+  }, criarEnvioAoSite(context, garantirLogin, async () => {}, () => janelaAdicao.newPage(), registrarAdicao),
+  janelaAdicao, historico, compartilhamento, buscadorLinks);
   console.log('Clique em Atualizar no painel para iniciar uma rodada.');
 }
 
