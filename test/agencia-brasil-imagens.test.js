@@ -43,6 +43,7 @@ async function paginaComCorpo(html) {
 const logo = '<img src="/uploads/logo-agencia-brasil.png" alt="Logotipo da Agência Brasil">';
 const foto = '<figure><img src="/uploads/reportagem.jpg" alt="Foto: Agência Brasil"><figcaption>Registro da reportagem</figcaption></figure>';
 const logoReal = '<figure data-rx-type="image"><a href="https://agenciabrasil.ebc.com.br/"><img src="/uploads/logo-agenciabrasil.svg" alt="Logo Agência Brasil"></a></figure>';
+const logoSemTipo = '<figure style="text-align: center;"><a href="https://agenciabrasil.ebc.com.br/noticia" target="_BLANK"><img alt="Logo Agência Brasil" src="https://cdn.jsdelivr.net/gh/sergiosdlima/assets-ebc@1.0.0/abr/assets/images/logo-agenciabrasil.svg" style="height: 54px;"></a></figure>';
 
 test('extrai o HTML real da requisição sem confundir outros campos', () => {
   const html = '<p>Texto & <strong>formatação</strong>.</p>';
@@ -163,6 +164,31 @@ test('remove figure do editor contendo somente o logotipo e seu link', async () 
     assert.equal(await page.locator('.rx-editor a[href="https://agenciabrasil.ebc.com.br/"]').count(), 0);
     assert.match(await page.locator('.rx-editor').innerHTML(), /<strong>Antes<\/strong>.*href="https:\/\/exemplo.test\/externo".*<p>Depois\.<\/p>/);
     assert.equal(await page.locator('#imagem-destaque').getAttribute('src'), '/destaque.jpg');
+  } finally { await page.close(); }
+});
+
+test('remove o figure real sem data-rx-type e confirma HTML do formulário', async () => {
+  const html = `<p><strong>Antes</strong> com <a href="https://exemplo.test/noticia">link</a>.</p>${logoSemTipo}${foto}<p>Depois.</p>`;
+  const page = await paginaComCorpo(html);
+  try {
+    assert.deepEqual(await prepararImagensAgenciaBrasil(page), { ok:true, removidas:1 });
+    const enviado = await page.locator('form').evaluate(form => new FormData(form).get('text'));
+    assert.doesNotMatch(enviado, /logo-agenciabrasil\.svg/);
+    assert.match(enviado, /<strong>Antes<\/strong>/);
+    assert.match(enviado, /href="https:\/\/exemplo.test\/noticia"/);
+    assert.match(enviado, /foto-reportagem|reportagem\.jpg/);
+    assert.equal(await page.locator('.rx-editor figure').count(), 1);
+    assert.equal(await page.locator('#imagem-destaque').getAttribute('src'), '/destaque.jpg');
+  } finally { await page.close(); }
+});
+
+test('figure sem data-rx-type com legenda preserva o conteúdo e exige revisão', async () => {
+  const html = logoSemTipo.replace('</figure>', '<figcaption>Informação editorial</figcaption></figure>');
+  const page = await paginaComCorpo(html);
+  try {
+    const resultado = await prepararImagensAgenciaBrasil(page);
+    assert.equal(resultado.ok, false);
+    assert.equal(await page.locator('form').evaluate(form => new FormData(form).get('text')), html);
   } finally { await page.close(); }
 });
 

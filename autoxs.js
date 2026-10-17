@@ -139,13 +139,7 @@ function localizarCampoChapeu(aba) {
     .filter({ visible: true });
 }
 
-async function lerPendencias(aba) {
-  if (imagemEmGeracao(aba)) throw new Error('A geração de imagem ainda está em andamento.');
-  const campo = localizarCampoChapeu(aba);
-  if (await campo.count() !== 1 || !await campo.isVisible()) {
-    throw new Error('Campo Chapéu não identificado.');
-  }
-  const chapeu = (await campo.inputValue()).trim();
+async function lerConferenciaCategoria(aba, chapeu) {
   const categoria = await lerCategoriaAtual(aba);
   const campoTitulo = aba.locator('input[name="title"], #inp_title');
   const titulo = await campoTitulo.count() === 1 ? await campoTitulo.inputValue() : '';
@@ -162,6 +156,52 @@ async function lerPendencias(aba) {
     else if (await campoTexto.count() === 1) conteudo = await campoTexto.inputValue();
   }
   const conferenciaCategoria = conferirCategoriaEsportes({ categoria, titulo, chapeu, subtitulo, conteudo });
+  return { categoria, conferenciaCategoria };
+}
+
+async function corrigirCategoriaGeral(aba) {
+  const campo = aba.locator('#inp_category_id, select[name="category_id"]');
+  if (await campo.count() !== 1) return false;
+  const opcao = await campo.evaluate(select => {
+    if (select.tagName !== 'SELECT' || select.name !== 'category_id' || !select.closest('form')) return null;
+    const geral = [...select.options].filter(item => item.textContent.trim().normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '').toLowerCase() === 'geral' && !item.disabled);
+    return geral.length === 1 && geral[0].value ? geral[0].value : null;
+  });
+  if (!opcao) return false;
+  await campo.selectOption(opcao);
+  return await campo.evaluate((select, valor) => {
+    const formulario = select.closest('form');
+    return select.value === valor && select.selectedOptions.length === 1 &&
+      select.selectedOptions[0].textContent.trim().normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '').toLowerCase() === 'geral' &&
+      new FormData(formulario).getAll(select.name).length === 1 &&
+      new FormData(formulario).get(select.name) === valor;
+  }, opcao);
+}
+
+async function lerPendencias(aba) {
+  if (imagemEmGeracao(aba)) throw new Error('A geração de imagem ainda está em andamento.');
+  const campo = localizarCampoChapeu(aba);
+  if (await campo.count() !== 1 || !await campo.isVisible()) {
+    throw new Error('Campo Chapéu não identificado.');
+  }
+  const chapeu = (await campo.inputValue()).trim();
+  let { categoria, conferenciaCategoria } = await lerConferenciaCategoria(aba, chapeu);
+  if (conferenciaCategoria.categoriaDestino === 'Geral') {
+    const assunto = conferenciaCategoria.assunto;
+    let corrigida = false;
+    try { corrigida = await corrigirCategoriaGeral(aba); }
+    catch { /* Categoria não confirmada: preservar a matéria para revisão. */ }
+    if (corrigida && (await lerCategoriaAtual(aba)).trim().toLowerCase() === 'geral') {
+      categoria = 'Geral';
+      conferenciaCategoria = { revisar:false,
+        mensagem:`Categoria corrigida de Esportes para Geral (${assunto}); demais requisitos continuam obrigatórios.` };
+    } else {
+      conferenciaCategoria = { revisar:true,
+        mensagem:`Categoria Esportes indica ${assunto}, mas a mudança para Geral não foi confirmada no formulário. Revisão manual necessária.` };
+    }
+  }
   await mostrarConferenciaCategoria(aba, conferenciaCategoria);
   const imagem = await verificarImagemDestaque(aba);
   return { temChapeu: Boolean(chapeu), temImagem: imagem.temImagem, categoria, conferenciaCategoria };
@@ -210,6 +250,15 @@ async function enviarMateria(aba, mostrarAviso = true, informarPendencia = () =>
   if (!await validarChapeuEFotoAntesDoEnvio(aba, mostrarAviso)) return false;
   if (!await enviar.isEnabled()) return false;
   if (!await formulario.evaluate(form => form.checkValidity())) return false;
+  const categoriaAntesEnvio = await lerConferenciaCategoria(aba, (await campo.inputValue()).trim());
+  if (categoriaAntesEnvio.conferenciaCategoria.revisar || categoriaAntesEnvio.conferenciaCategoria.categoriaDestino) {
+    const motivo = categoriaAntesEnvio.conferenciaCategoria.categoriaDestino
+      ? 'Categoria Esportes ainda precisa ser confirmada como Geral antes do envio automático.'
+      : categoriaAntesEnvio.conferenciaCategoria.mensagem;
+    informarPendencia(motivo);
+    console.warn(`[AUTOXS] ${motivo}`);
+    return false;
+  }
   // Altera somente imagens de identificação inequívocas no corpo, após a
   // conferência independente de chapéu e imagem destacada.
   let limpeza;
@@ -229,6 +278,15 @@ async function enviarMateria(aba, mostrarAviso = true, informarPendencia = () =>
   }
   if (limpeza.removidas) console.log(`[AUTOXS] Agência Brasil: ${limpeza.removidas} imagem(ns) de identificação removida(s) do corpo.`);
   const corpoEsperado = limpeza.removidas ? await aba.locator('#inp_text, textarea[name="text"]').inputValue() : null;
+  if (limpeza.removidas) {
+    const conferenciaCorpo = await aba.evaluate(analisarImagensAgenciaBrasil, corpoEsperado);
+    if (conferenciaCorpo.removidas || conferenciaCorpo.ambiguas.length) {
+      const motivo = 'Agência Brasil: logotipo voltou ao campo enviado; revisão manual necessária.';
+      informarPendencia(motivo);
+      console.warn(`[AUTOXS] ${motivo}`);
+      return false;
+    }
+  }
   const urlInicial = aba.url();
   const action = await formulario.evaluate(form => form.action);
   const mensagensAntes = await aba.locator('.alert-success, .toast-success, [role="status"]').allTextContents();
@@ -241,14 +299,15 @@ async function enviarMateria(aba, mostrarAviso = true, informarPendencia = () =>
     if (!['POST', 'PUT', 'PATCH'].includes(requisicao.method()) ||
         destino.origin !== new URL(urlInicial).origin ||
         ![new URL(action).pathname, new URL(urlInicial).pathname].includes(destino.pathname)) {
-      await rota.continue();
+      await rota.fallback();
       return;
     }
     try {
       const html = extrairHtmlRequisicao(requisicao);
-      const verificacao = html === null ? null : await aba.evaluate(analisarImagensAgenciaBrasil, html);
-      if (html === corpoEsperado && verificacao && !verificacao.removidas && !verificacao.ambiguas.length) {
-        await rota.continue();
+      // O corpo esperado já foi analisado no editor/formulário. Conferir os
+      // bytes da requisição evita consultar a Page durante uma navegação POST.
+      if (html !== null && html === corpoEsperado) {
+        await rota.fallback();
         return;
       }
       motivoRequisicao = 'Agência Brasil: logotipo ou HTML do corpo não verificável na requisição; revisão manual necessária.';

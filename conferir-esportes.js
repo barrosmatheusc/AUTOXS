@@ -24,17 +24,32 @@ const chapeuRestrito = /^(?:astronomia|arqueologia|cultura)$/;
 function revisarEsportes({ titulo, chapeu, subtitulo, conteudo }) {
   const manchete = normalizar(titulo);
   const rotulo = normalizar(chapeu);
+  const contexto = normalizar(`${subtitulo || ''} ${String(conteudo || '').slice(0, 1800)}`);
   // O assunto expresso pela manchete prevalece sobre menções secundárias,
   // inclusive quando o chapéu contém uma das palavras restritas.
   if (mancheteEsportiva.test(manchete)) return { revisar:false, mensagem:'' };
-  const assuntoNoTitulo = indicadoresEsportes.find(([, padrao]) => padrao.test(manchete))?.[0];
-  if (assuntoNoTitulo) return {
-    revisar:true,
-    mensagem:`Revisão editorial: categoria Esportes, mas o título indica ${assuntoNoTitulo} como assunto principal. Confira a categoria antes de enviar.`
-  };
-  const contexto = normalizar(`${subtitulo || ''} ${String(conteudo || '').slice(0, 1800)}`);
-  const assuntoNoContexto = indicadoresEsportes.find(([, padrao]) => padrao.test(contexto))?.[0];
+  const assuntosNoTitulo = indicadoresEsportes.filter(([, padrao]) => padrao.test(manchete)).map(([nome]) => nome);
+  const assuntosNoContexto = indicadoresEsportes.filter(([, padrao]) => padrao.test(contexto)).map(([nome]) => nome);
+  const assuntoNoContexto = assuntosNoContexto[0];
+  const esporteNoTitulo = contextoEsportivo.test(manchete);
   const esporteNoContexto = contextoEsportivo.test(contexto);
+  const chapeuEsportivo = contextoEsportivo.test(rotulo);
+  const assuntoPrincipal = assuntosNoTitulo.length === 1 ? assuntosNoTitulo[0] :
+    chapeuRestrito.test(rotulo) && assuntosNoContexto.length === 1 &&
+    assuntosNoContexto[0] === rotulo ? rotulo : '';
+  if (assuntoPrincipal && !esporteNoTitulo && !esporteNoContexto && !chapeuEsportivo &&
+      !assuntosNoTitulo.some(assunto => assunto !== assuntoPrincipal) &&
+      !assuntosNoContexto.some(assunto => assunto !== assuntoPrincipal) &&
+      (!chapeuRestrito.test(rotulo) || rotulo === assuntoPrincipal)) return {
+    revisar:false,
+    categoriaDestino:'Geral',
+    assunto:assuntoPrincipal,
+    mensagem:`Categoria Esportes incompatível com o assunto principal (${assuntoPrincipal}); alterar para Geral antes do envio.`
+  };
+  if (assuntosNoTitulo.length) return {
+    revisar:true,
+    mensagem:`Revisão editorial: categoria Esportes, mas o título indica ${assuntosNoTitulo.join(', ')} junto de sinais conflitantes. Confirme o assunto principal.`
+  };
   if (assuntoNoContexto) return {
     revisar:true,
     mensagem:`Revisão editorial: categoria Esportes, mas ${assuntoNoContexto} aparece no resumo ou início do texto${esporteNoContexto ? ' junto de sinais esportivos' : ''}. Confirme o assunto principal.`
@@ -49,6 +64,9 @@ function revisarEsportes({ titulo, chapeu, subtitulo, conteudo }) {
 function conferirCategoriaEsportes({ categoria, titulo, chapeu, subtitulo, conteudo }) {
   const categoriaNormalizada = normalizar(categoria);
   if (ehCategoriaEsportiva(categoria)) return revisarEsportes({ titulo, chapeu, subtitulo, conteudo });
+  // Geral é o destino validado para os assuntos principais que chegaram
+  // incorretamente em Esportes; não os bloqueie outra vez após a correção.
+  if (categoriaNormalizada === 'geral') return { revisar:false, mensagem:'' };
   const tituloNormalizado = normalizar(titulo);
   const chapeuNormalizado = normalizar(chapeu);
   const assuntos = assuntosRestritos

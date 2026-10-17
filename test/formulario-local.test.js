@@ -6,15 +6,18 @@ let browser;
 before(async () => { browser = await chromium.launch({ channel: 'msedge', headless: true }); });
 after(async () => { await browser?.close(); });
 
-async function paginaLocal({ rotulo = 'Chapéu (opcional)', nome = 'campo', valor = 'Política', foto = true, botao = 'Enviar', erro = false, icone = false } = {}) {
+async function paginaLocal({ rotulo = 'Chapéu (opcional)', nome = 'campo', valor = 'Política', foto = true, botao = 'Enviar', erro = false, icone = false,
+  categoria = '', geral = true, titulo = '', subtitulo = '', corpoHtml = '' } = {}) {
   const context = await browser.newContext();
   const page = await context.newPage();
-  let envios = 0;
+  let envios = 0, ultimoPost = '';
   const svg = encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><rect width="200" height="120" fill="blue"/></svg>');
   const html = `<html><head><meta charset="utf-8"></head><body><form method="post" action="/news/1/edit">
     <input name="chapeu_oculto" type="hidden">
     ${rotulo ? `<label for="${nome}">${rotulo}</label>` : ''}
     <input id="${nome}" name="${nome}" value="${valor}">
+    ${categoria ? `<input id="inp_title" name="title" value="${titulo}"><input id="inp_subtitle" name="subtitle" value="${subtitulo}">
+    <select id="inp_category_id" name="category_id"><option value="7">${categoria}</option>${geral ? '<option value="1">Geral</option>' : ''}</select>` : ''}
     <div><button type="button">+</button></div>
     ${foto ? `<div><img width="200" height="120" src="data:image/svg+xml,${svg}"></div>` : ''}
     <div><button type="button">+</button></div>
@@ -23,20 +26,99 @@ async function paginaLocal({ rotulo = 'Chapéu (opcional)', nome = 'campo', valo
     <div class="rx-editor" contenteditable="true"><p>Corpo de teste preservado.</p></div>
     <textarea class="rx-source" hidden></textarea>
     <button type="submit">${icone ? '<i></i> ' : ''}${botao}</button>
-    </form></body></html>`;
+    </form><script>
+      document.querySelector('a[data-command="source.toggle"]').addEventListener('click', event => {
+        event.preventDefault();
+        const visual = document.querySelector('.rx-editor');
+        const fonte = document.querySelector('.rx-source');
+        if (fonte.hidden) { fonte.value = visual.innerHTML; visual.hidden = true; fonte.hidden = false; }
+        else { visual.innerHTML = fonte.value; document.querySelector('#inp_text').value = fonte.value;
+          fonte.hidden = true; visual.hidden = false; }
+      });
+    </script></body></html>`;
   // Todas as requisições são atendidas em memória. Nenhum acesso ao CMS/rede.
   await context.route('**/*', async route => {
     if (route.request().method() === 'POST') {
       envios++;
+      ultimoPost = route.request().postData() || '';
       await route.fulfill({ status: erro ? 422 : 200, contentType: 'text/html; charset=utf-8', body: erro
         ? '<div class="alert-danger">Falha de validação</div>'
         : '<div class="alert-success">Matéria atualizada com sucesso</div>' });
     } else await route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: html });
   });
   await page.goto('http://manual.test/news/1/edit');
-  if (foto) await page.locator('img').evaluate(img => img.decode());
-  return { page, context, envios: () => envios };
+  if (corpoHtml) {
+    await page.locator('.rx-editor').evaluate((elemento, conteudo) => { elemento.innerHTML = conteudo; }, corpoHtml);
+    await page.locator('#inp_text').evaluate((elemento, conteudo) => { elemento.value = conteudo; }, corpoHtml);
+  }
+  if (foto) await page.locator('form > div > img').evaluate(img => img.decode());
+  return { page, context, envios: () => envios, ultimoPost: () => ultimoPost };
 }
+
+test('Astronomia, Arqueologia e Cultura em Esportes mudam para Geral antes do envio', async () => {
+  for (const titulo of [
+    'Observatório registra descoberta de novo planeta',
+    'Pesquisadores encontram artefatos em escavação arqueológica',
+    'Festival de teatro anuncia programação cultural'
+  ]) {
+    const mock = await paginaLocal({ categoria:'Esportes', titulo });
+    try {
+      const estado = await lerPendencias(mock.page);
+      assert.equal(estado.categoria, 'Geral', titulo);
+      assert.equal(estado.conferenciaCategoria.revisar, false);
+      assert.equal(await mock.page.locator('form').evaluate(form => new FormData(form).get('category_id')), '1');
+      assert.equal(await enviarMateria(mock.page, false), true);
+      assert.equal(new URLSearchParams(mock.ultimoPost()).get('category_id'), '1');
+      assert.equal(mock.envios(), 1);
+    } finally { await mock.context.close(); }
+  }
+});
+
+test('POST local envia o corpo sem o figure do logotipo e preserva o texto', async () => {
+  const logo = '<figure style="text-align:center"><a href="https://agenciabrasil.ebc.com.br/noticia"><img alt="Logo Agência Brasil" src="https://cdn.jsdelivr.net/gh/sergiosdlima/assets-ebc@1.0.0/abr/assets/images/logo-agenciabrasil.svg"></a></figure>';
+  const mock = await paginaLocal({ corpoHtml:`<p><strong>Texto legítimo</strong></p>${logo}<p>Fim.</p>` });
+  try {
+    assert.equal(await enviarMateria(mock.page, false), true);
+    const enviado = new URLSearchParams(mock.ultimoPost()).get('text');
+    assert.doesNotMatch(enviado, /logo-agenciabrasil\.svg/);
+    assert.match(enviado, /<strong>Texto legítimo<\/strong>/);
+    assert.match(enviado, /<p>Fim\.<\/p>/);
+    assert.equal(mock.envios(), 1);
+  } finally { await mock.context.close(); }
+});
+
+test('categoria ambígua ou Geral ausente mantém matéria para revisão', async () => {
+  for (const opcoes of [
+    { categoria:'Esportes', titulo:'Programação é anunciada', subtitulo:'Festival de teatro e torneio de atletas' },
+    { categoria:'Esportes', titulo:'Observatório registra descoberta de novo planeta', geral:false }
+  ]) {
+    const mock = await paginaLocal(opcoes);
+    try {
+      const estado = await lerPendencias(mock.page);
+      assert.equal(estado.conferenciaCategoria.revisar, true);
+      assert.equal(await mock.page.locator('#inp_category_id').inputValue(), '7');
+      assert.equal(await enviarMateria(mock.page, false), false);
+      assert.equal(mock.envios(), 0);
+    } finally { await mock.context.close(); }
+  }
+});
+
+test('esporte legítimo fica em Esportes; chapéu ou foto ausente impedem o envio após correção', async () => {
+  const esporte = await paginaLocal({ categoria:'Esportes', titulo:'Equipe de basquete conquista campeonato' });
+  try {
+    assert.equal((await lerPendencias(esporte.page)).categoria, 'Esportes');
+    assert.equal(await enviarMateria(esporte.page, false), true);
+    assert.equal(new URLSearchParams(esporte.ultimoPost()).get('category_id'), '7');
+  } finally { await esporte.context.close(); }
+  for (const opcoes of [{ valor:'' }, { foto:false }]) {
+    const mock = await paginaLocal({ ...opcoes, categoria:'Esportes', titulo:'Observatório registra descoberta de novo planeta' });
+    try {
+      assert.equal((await lerPendencias(mock.page)).categoria, 'Geral');
+      assert.equal(await enviarMateria(mock.page, false), false);
+      assert.equal(mock.envios(), 0);
+    } finally { await mock.context.close(); }
+  }
+});
 
 test('campo real: reconhece rótulos variados e nome/id, ignorando campo oculto', async () => {
   for (const opcao of [

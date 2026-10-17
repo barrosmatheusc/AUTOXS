@@ -17,7 +17,6 @@ test('Cultura exige categoria explícita; Arqueologia e Astronomia seguem pelo a
   for (const dados of [
     { categoria:'Arqueologia', chapeu:'PESQUISA', titulo:'Estudo revela nova descoberta' },
     { categoria:'Ciência', chapeu:'ASTRONOMIA', titulo:'Estudo revela nova descoberta' },
-    { categoria:'Esportes', chapeu:'DESCOBERTA', titulo:'Escavação arqueológica revela sítio antigo' },
     { categoria:'Ciência', chapeu:'DESCOBERTA', titulo:'Telescópio registra nova galáxia' },
     { categoria:'Cultura', chapeu:'AGENDA', titulo:'Programação é divulgada' }
   ]) assert.equal(conferirCategoriaEsportes(dados).revisar, true, dados.titulo);
@@ -54,7 +53,7 @@ test('Esportes é liberado por padrão, inclusive sem palavras esportivas no tí
   ]) assert.equal(conferirCategoriaEsportes({ categoria:'Esportes', chapeu:'DESTAQUE', titulo }).revisar, false, titulo);
 });
 
-test('assunto principal não esportivo em Esportes exige revisão com motivo', () => {
+test('assunto principal inequívoco em Esportes pede mudança para Geral', () => {
   for (const [titulo, assunto] of [
     ['Observatório registra descoberta de novo planeta', 'astronomia'],
     ['Pesquisadores encontram artefatos em escavação arqueológica', 'arqueologia'],
@@ -62,7 +61,8 @@ test('assunto principal não esportivo em Esportes exige revisão com motivo', (
     ['Exposição de arte reúne artistas da região', 'cultura']
   ]) {
     const resultado = conferirCategoriaEsportes({ categoria:'Esportes', chapeu:'DESTAQUE', titulo });
-    assert.equal(resultado.revisar, true, titulo);
+    assert.equal(resultado.revisar, false, titulo);
+    assert.equal(resultado.categoriaDestino, 'Geral');
     assert.match(resultado.mensagem, new RegExp(assunto));
   }
 });
@@ -80,7 +80,8 @@ test('menções culturais incidentais em manchetes esportivas não bloqueiam', (
 test('chapéu e contexto ajudam a distinguir Cultura de esporte e dúvida concreta', () => {
   const cultural = conferirCategoriaEsportes({ categoria:'Esportes', chapeu:'CULTURA',
     titulo:'Programação é anunciada', subtitulo:'Festival de teatro apresenta novas peças' });
-  assert.equal(cultural.revisar, true);
+  assert.equal(cultural.revisar, false);
+  assert.equal(cultural.categoriaDestino, 'Geral');
   assert.match(cultural.mensagem, /cultura/);
   const esportiva = conferirCategoriaEsportes({ categoria:'Esportes', chapeu:'CULTURA',
     titulo:'Programação é anunciada', conteudo:'Torneio de basquete reúne atletas e equipes de escolas.' });

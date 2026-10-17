@@ -39,8 +39,13 @@ function analisarImagensAgenciaBrasil(html) {
             conteudo.children.length === 1 && conteudo.firstElementChild === imagem);
         // O figure do editor só pode conter a imagem (e seu link). Texto,
         // legenda, outra mídia ou estrutura desconhecida exigem revisão.
-        if (figura.getAttribute('data-rx-type') === 'image' &&
-            unicoNo && !figura.textContent.trim()) confirmadas.push(figura);
+        const tipoEditor = figura.getAttribute('data-rx-type');
+        const somenteEspacos = elemento => [...elemento.childNodes].every(no =>
+          no.nodeType === Node.ELEMENT_NODE ||
+          (no.nodeType === Node.TEXT_NODE && !no.textContent.trim()));
+        if ((!tipoEditor || tipoEditor === 'image') && unicoNo &&
+            somenteEspacos(figura) && (conteudo === imagem || somenteEspacos(conteudo)) &&
+            !figura.textContent.trim()) confirmadas.push(figura);
         else ambiguas.push(indice + 1);
       }
     } else if (identificada || suspeita) ambiguas.push(indice + 1);
