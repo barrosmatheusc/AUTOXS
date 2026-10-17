@@ -1,6 +1,10 @@
-const { test } = require('node:test');
+const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const { chromium } = require('playwright');
 const { abrirMateriaEmSegundoPlano, prepararAbaMateria, converterData, coletarMaterias, processarLote, enviarMateria } = require('../autoxs');
+let browser;
+before(async () => { browser = await chromium.launch({ channel:'msedge', headless:true }); });
+after(async () => { await browser?.close(); });
 
 const materia = (id, data = '01/01/2026 00:00') => ({ titulo: `Matéria ${id}`, data, url: `https://redacao.tribunaweb.com.br/news/${id}/edit` });
 
@@ -54,13 +58,13 @@ test('abre todo o lote primeiro; envia e fecha somente com chapéu e foto', asyn
   assert.deepEqual(resumo, { abertas: 5, enviadas: 1, pendentes: 4, erros: 0 });
 });
 
-test('não abre matérias de 2025 e limita a página a 25 abas', async () => {
+test('aceita matérias anteriores a 2026 até a referência e limita a página a 25 abas', async () => {
   const lote = [materia('antiga', '31/12/2025 23:59'), ...Array.from({ length: 28 }, (_, i) => materia(i))];
   const estados = Object.fromEntries(lote.map(m => [m.titulo, { temChapeu: false, temImagem: true }]));
   const { operacoes, eventos } = operacoesPara(estados);
   await processarLote(lote, operacoes);
-  assert.equal(eventos.some(e => e === 'abrir:Matéria antiga'), false);
-  assert.ok(eventos.filter(e => e.startsWith('abrir:')).length <= 25);
+  assert.equal(eventos.some(e => e === 'abrir:Matéria antiga'), true);
+  assert.equal(eventos.filter(e => e.startsWith('abrir:')).length, 25);
 });
 
 test('envio não confirmado mantém a aba aberta', async () => {
@@ -153,7 +157,7 @@ function paginaListagem(itens) {
   };
 }
 
-test('coleta ignora antigas, inválidas, invisíveis, sem edição, duplicadas e URLs externas', async () => {
+test('coleta usa referência, visibilidade e URL válida sem filtrar pela data informativa', async () => {
   const itens = [
     materia(1), materia(2, '31/12/2025 23:59'), materia(3), materia(1),
     materia(4, '31/02/2026'), { ...materia(5), links: [] },
@@ -161,7 +165,8 @@ test('coleta ignora antigas, inválidas, invisíveis, sem edição, duplicadas e
     { ...materia(8), links: [materia(8).url, materia(9).url] }
   ];
   const coletadas = await coletarMaterias(paginaListagem(itens));
-  assert.deepEqual(coletadas.map(m => m.titulo), ['Matéria 1', 'Matéria 3']);
+  assert.deepEqual(coletadas.map(m => m.titulo), ['Matéria 1', 'Matéria 2', 'Matéria 3', 'Matéria 4']);
+  assert.equal(coletadas[3].data, '31/02/2026');
 });
 
 test('coleta retorna até 25 matérias elegíveis na página', async () => {
@@ -175,40 +180,55 @@ function campoSimulado(campo) {
   campo.filter = () => campo;
   return campo;
 }
-function paginaEnvio({ status = 200, confirma = true, valido = true, botao = true } = {}) {
-  let clicou = false;
-  const formulario = {
-    count: async () => 1,
-    getByRole: () => campoSimulado({ count: async () => botao ? 1 : 0, isEnabled: async () => true, click: async () => { clicou = true; } }),
-    evaluate: async callback => callback({ checkValidity: () => valido, action: materia(1).url })
-  };
-  const pagina = {
-    getByRole: () => campoSimulado({ locator: () => formulario }),
-    url: () => materia(1).url,
-    locator: () => ({ allTextContents: async () => [] }),
-    waitForResponse: async predicado => {
-      const resposta = { request: () => ({ method: () => 'POST' }), url: () => materia(1).url, status: () => status };
-      assert.equal(predicado(resposta), true);
-      return resposta;
-    },
-    waitForFunction: async () => { if (!confirma) throw new Error('sem confirmação'); }
-  };
-  return { pagina, clicou: () => clicou };
+async function paginaEnvio({ status = 200, confirma = true, valido = true, botao = true } = {}) {
+  const contexto = await browser.newContext();
+  const pagina = await contexto.newPage();
+  let envios = 0;
+  const imagem = encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><rect width="200" height="120" fill="blue"/></svg>');
+  const formulario = `<form action="/news/1/edit" method="post">
+    <label for="inp_hat">Chapéu</label><input id="inp_hat" name="hat" value="ESPORTE">
+    <input name="title" ${valido ? 'value="Título"' : 'required'}>
+    <div><button type="button">+</button></div>
+    <div><img width="200" height="120" src="data:image/svg+xml,${imagem}"></div>
+    <div><button type="button">+</button></div>
+    <textarea id="inp_text" name="text" hidden></textarea>
+    <a href="#" data-command="source.toggle">HTML</a>
+    <div class="rx-editor" contenteditable="true"><p>Corpo editorial.</p></div>
+    <textarea class="rx-source" hidden></textarea>
+    ${botao ? '<button type="submit">Enviar</button>' : ''}
+  </form>`;
+  await contexto.route('**/*', async rota => {
+    if (rota.request().method() === 'POST') {
+      envios++;
+      await rota.fulfill({ status, contentType:'text/html; charset=utf-8', body:confirma
+        ? '<div class="alert-success">Matéria atualizada com sucesso</div>'
+        : '<div class="alert-danger">Envio sem confirmação</div>' });
+    } else await rota.fulfill({ contentType:'text/html; charset=utf-8', body:formulario });
+  });
+  await pagina.goto('http://manual.test/news/1/edit');
+  await pagina.locator('img').evaluate(img => img.decode());
+  return { pagina, contexto, envios: () => envios };
 }
 
 test('envio exige resposta sem erro e confirmação da interface', async () => {
   for (const [opcoes, esperado] of [[{}, true], [{ status: 422 }, false], [{ status: 500 }, false], [{ confirma: false }, false]]) {
-    const { pagina } = paginaEnvio(opcoes);
-    assert.equal(await enviarMateria(pagina), esperado);
+    const mock = await paginaEnvio(opcoes);
+    try {
+      assert.equal(await enviarMateria(mock.pagina, false), esperado,
+        `envios=${mock.envios()} url=${mock.pagina.url()} resposta=${await mock.pagina.locator('body').innerText()}`);
+      assert.equal(mock.envios(), 1);
+    } finally { await mock.contexto.close(); }
   }
 });
 
 test('formulário inválido ou botão ausente não dispara envio', async () => {
   for (const opcoes of [{ valido: false }, { botao: false }]) {
-    const mock = paginaEnvio(opcoes);
-    if (opcoes.botao === false) await assert.rejects(enviarMateria(mock.pagina), /Botão Enviar/);
-    else assert.equal(await enviarMateria(mock.pagina), false);
-    assert.equal(mock.clicou(), false);
+    const mock = await paginaEnvio(opcoes);
+    try {
+      if (opcoes.botao === false) await assert.rejects(enviarMateria(mock.pagina, false), /Botão Enviar/);
+      else assert.equal(await enviarMateria(mock.pagina, false), false);
+      assert.equal(mock.envios(), 0);
+    } finally { await mock.contexto.close(); }
   }
 });
 

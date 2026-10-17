@@ -24,9 +24,10 @@ test('painel inicia parado, bloqueia rodadas simultâneas e permite atualizar no
     assert.equal(await painel.locator('h1').textContent(), 'Vamos atualizar?');
     await painel.screenshot({ path: path.join(__dirname, '..', 'work', 'painel-inicial.png') });
     await painel.getByRole('button', { name: 'Atualizar', exact: true }).click();
+    await painel.getByRole('button', { name: 'Página 1' }).click();
     await painel.getByRole('button', { name: 'Atualizando…' }).waitFor();
     assert.equal(await painel.locator('#atualizar').isDisabled(), true);
-    const concorrente = await painel.evaluate(() => window.atualizarMaterias());
+    const concorrente = await painel.evaluate(() => window.atualizarMaterias({ pagina:1, modo:'visivel' }));
     assert.equal(concorrente.ok, false);
     assert.equal(chamadas, 1);
     liberar();
@@ -36,6 +37,7 @@ test('painel inicia parado, bloqueia rodadas simultâneas e permite atualizar no
     assert.equal(await painel.locator('#pendentes').textContent(), '3');
     await painel.screenshot({ path: path.join(__dirname, '..', 'work', 'painel-concluido.png') });
     await painel.getByRole('button', { name: 'Atualizar', exact: true }).click();
+    await painel.getByRole('button', { name: 'Página 1' }).click();
     await painel.getByRole('button', { name: 'Atualizar', exact: true }).waitFor();
     assert.equal(chamadas, 2);
   } finally { await context.close(); }
@@ -46,9 +48,10 @@ test('falha mostra aviso simples e libera uma nova tentativa', async () => {
   const painel = await criarPainelManual(context, async () => { throw new Error('Detalhe técnico privado'); });
   try {
     await painel.getByRole('button', { name: 'Atualizar', exact: true }).click();
+    await painel.getByRole('button', { name: 'Página 1' }).click();
     await painel.waitForFunction(() => document.querySelector('#etapa').textContent.includes('atenção'));
     assert.equal(await painel.locator('#atualizar').isEnabled(), true);
-    assert.equal((await painel.locator('body').textContent()).includes('Detalhe técnico privado'), false);
+    assert.match(await painel.locator('#status').textContent(), /Detalhe técnico privado/);
   } finally { await context.close(); }
 });
 

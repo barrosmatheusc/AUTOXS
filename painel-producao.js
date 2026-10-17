@@ -188,6 +188,7 @@ function criarBuscadorLinks(historico, compartilhamento, {
 
 function criarPainelProducao(context, historico, compartilhamento = null, buscadorExterno = null) {
   const url = pathToFileURL(path.join(__dirname, 'painel-producao.html')).href;
+  const urlIntegrada = url + '?integrado=1';
   const buscador = buscadorExterno || criarBuscadorLinks(historico, compartilhamento);
   let pagina = null;
   let abrindo = null;
@@ -196,6 +197,58 @@ function criarPainelProducao(context, historico, compartilhamento = null, buscad
     if (recuperando) return recuperando;
     recuperando = buscador.procurarPendentes().finally(() => { recuperando = null; });
     return recuperando;
+  }
+  async function registrarOperacoes(alvo, origemValida) {
+    await alvo.exposeBinding('operacaoProducao', async ({ frame }, entrada) => {
+      if (!origemValida(frame) || !entrada || typeof entrada !== 'object') return { ok:false, mensagem:'Abra o painel de produção do AutoXS.' };
+      try {
+        let resultado;
+        switch (entrada.acao) {
+          case 'consultar': resultado = await historico.consultar(entrada.data); break;
+          case 'materiasPorResponsavel': resultado = await historico.materiasPorResponsavel(entrada.data); break;
+          case 'relatorio': resultado = await historico.relatorio(entrada.data); break;
+          case 'responsavel': resultado = await historico.responsavel(entrada.id, entrada.responsavelId ?? null); break;
+          case 'cadastrar': resultado = await historico.cadastrarResponsavel(entrada.nome); break;
+          case 'editar': resultado = await historico.editarResponsavel(entrada.id, entrada.mudanca || {}); break;
+          case 'removerResponsavel': resultado = await historico.removerResponsavel(entrada.id); break;
+          case 'definirUrl': resultado = await historico.definirUrl(entrada.id, entrada.url); break;
+          case 'compartilhavel': resultado = await historico.compartilhavel(entrada.id); break;
+          case 'procurarLink': resultado = await buscador.procurar(entrada.id); break;
+          case 'cancelarProcura': resultado = buscador.cancelar(entrada.id); break;
+          default: throw new Error('Ação desconhecida.');
+        }
+        return { ok:true, resultado };
+      } catch (erro) { return { ok:false, mensagem:erro.message || 'Não foi possível consultar o histórico.' }; }
+    });
+  }
+  async function integrar(alvo) {
+    const quadro = () => alvo.frames().find(frame => frame.parentFrame() === alvo.mainFrame() && frame.url() === urlIntegrada);
+    await registrarOperacoes(alvo, frame => frame.parentFrame() === alvo.mainFrame() && frame.url() === urlIntegrada);
+    let iniciouBusca = false;
+    alvo.on('framenavigated', frame => {
+      if (frame.parentFrame() !== alvo.mainFrame() || frame.url() !== urlIntegrada) return;
+      void (async () => {
+        await frame.waitForFunction(() => typeof window.atualizarProgressoProcura === 'function');
+        for (const ativa of buscador.ativas()) {
+          await frame.evaluate(dados => window.atualizarProgressoProcura?.(dados),
+            { ...ativa, estado:'procurando' });
+        }
+        if (!iniciouBusca) {
+          iniciouBusca = true;
+          void recuperarPendentes().catch(erro => console.warn('[AUTOXS] Busca de links: ' + erro.message));
+        }
+      })().catch(erro => console.warn('[AUTOXS] Painel de produção: ' + erro.message));
+    });
+    const deixarDeObservar = historico.observar?.(() => {
+      const frame = quadro();
+      if (frame && !alvo.isClosed()) void frame.evaluate(() => window.atualizarProducao?.()).catch(() => {});
+    });
+    const deixarDeOuvirBusca = buscador.observar(evento => {
+      const frame = quadro();
+      if (frame && !alvo.isClosed()) void frame.evaluate(dados => window.atualizarProgressoProcura?.(dados), evento).catch(() => {});
+    });
+    alvo.on('close', () => { deixarDeObservar?.(); deixarDeOuvirBusca(); });
+    return urlIntegrada;
   }
   async function abrir(aba = 'estatisticas') {
     if (pagina && !pagina.isClosed()) {
@@ -209,27 +262,7 @@ function criarPainelProducao(context, historico, compartilhamento = null, buscad
       const nova = await context.newPage();
       const origemValida = frame => frame === nova.mainFrame() && frame.url() === url;
       try {
-        await nova.exposeBinding('operacaoProducao', async ({ frame }, entrada) => {
-          if (!origemValida(frame) || !entrada || typeof entrada !== 'object') return { ok:false, mensagem:'Abra o painel de produção do AutoXS.' };
-          try {
-            let resultado;
-            switch (entrada.acao) {
-              case 'consultar': resultado = await historico.consultar(entrada.data); break;
-              case 'materiasPorResponsavel': resultado = await historico.materiasPorResponsavel(entrada.data); break;
-              case 'relatorio': resultado = await historico.relatorio(entrada.data); break;
-              case 'responsavel': resultado = await historico.responsavel(entrada.id, entrada.responsavelId ?? null); break;
-              case 'cadastrar': resultado = await historico.cadastrarResponsavel(entrada.nome); break;
-              case 'editar': resultado = await historico.editarResponsavel(entrada.id, entrada.mudanca || {}); break;
-              case 'removerResponsavel': resultado = await historico.removerResponsavel(entrada.id); break;
-              case 'definirUrl': resultado = await historico.definirUrl(entrada.id, entrada.url); break;
-              case 'compartilhavel': resultado = await historico.compartilhavel(entrada.id); break;
-              case 'procurarLink': resultado = await buscador.procurar(entrada.id); break;
-              case 'cancelarProcura': resultado = buscador.cancelar(entrada.id); break;
-              default: throw new Error('Ação desconhecida.');
-            }
-            return { ok:true, resultado };
-          } catch (erro) { return { ok:false, mensagem:erro.message || 'Não foi possível consultar o histórico.' }; }
-        });
+        await registrarOperacoes(nova, origemValida);
         await nova.goto(url);
         pagina = nova;
         const deixarDeObservar = historico.observar?.(() => {
@@ -251,7 +284,7 @@ function criarPainelProducao(context, historico, compartilhamento = null, buscad
     })().finally(() => { abrindo = null; });
     return abrindo;
   }
-  return { abrir };
+  return { abrir, integrar };
 }
 
 module.exports = { criarPainelProducao, recuperarLinksPendentes, recuperarLinksPorCompartilhamento, criarBuscadorLinks };

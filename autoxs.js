@@ -4,7 +4,7 @@ const { criarPainelManual } = require('./painel-manual');
 const { criarSessaoAtualizacaoDiscreta } = require('./sessao-atualizacao-discreta');
 const { criarGrupoJanelas } = require('./janelas-trabalho');
 const { confirmarSalvamento, acompanharEnvioManual } = require('./acompanhar-envio');
-const { conferirCategoriaEsportes, mostrarConferenciaCategoria } = require('./conferir-esportes');
+const { conferirCategoriaEsportes, mostrarConferenciaCategoria, ehCategoriaEsportiva } = require('./conferir-esportes');
 const { selecionarPaginaListagem } = require('./pagina-listagem');
 const { criarEnvioAoSite } = require('./preencher-materia');
 const { criarHistoricoProducao } = require('./historico-producao');
@@ -15,7 +15,7 @@ const { acompanharFotosAdicao } = require('./fotos-adicao');
 const { instalarBotaoLegenda } = require('./botao-legenda');
 const { instalarSugestoesChapeuCMS } = require('./sugestoes-chapeu-cms');
 const { validarRequisitosDaMateria, instalarProtecaoEnvioCMS } = require('./requisitos-materia');
-const { prepararImagensAgenciaBrasil } = require('./agencia-brasil-imagens');
+const { prepararImagensAgenciaBrasil, analisarImagensAgenciaBrasil, extrairHtmlRequisicao } = require('./agencia-brasil-imagens');
 const { lerCategoriaAtual, podeGerarImagemRJ, gerarImagemRJ, gerarImagemPorSolicitacao, imagemEmGeracao } = require('./imagem-rj');
 
 const TITULO_LIMITE = 'Quanto foi o jogo Brasil x Japão hoje? Veja resultado dos gols';
@@ -149,7 +149,19 @@ async function lerPendencias(aba) {
   const categoria = await lerCategoriaAtual(aba);
   const campoTitulo = aba.locator('input[name="title"], #inp_title');
   const titulo = await campoTitulo.count() === 1 ? await campoTitulo.inputValue() : '';
-  const conferenciaCategoria = conferirCategoriaEsportes({ categoria, titulo, chapeu });
+  let subtitulo = '';
+  let conteudo = '';
+  if (ehCategoriaEsportiva(categoria)) {
+    const campoSubtitulo = aba.locator('input[name="subtitle"], textarea[name="subtitle"], #inp_subtitle');
+    if (await campoSubtitulo.count() === 1) subtitulo = await campoSubtitulo.inputValue();
+    const fonte = aba.locator('.rx-source');
+    const editor = aba.locator('.rx-editor');
+    const campoTexto = aba.locator('#inp_text, textarea[name="text"]');
+    if (await fonte.count() === 1 && await fonte.isVisible()) conteudo = await fonte.inputValue();
+    else if (await editor.count() === 1) conteudo = await editor.textContent() || '';
+    else if (await campoTexto.count() === 1) conteudo = await campoTexto.inputValue();
+  }
+  const conferenciaCategoria = conferirCategoriaEsportes({ categoria, titulo, chapeu, subtitulo, conteudo });
   await mostrarConferenciaCategoria(aba, conferenciaCategoria);
   const imagem = await verificarImagemDestaque(aba);
   return { temChapeu: Boolean(chapeu), temImagem: imagem.temImagem, categoria, conferenciaCategoria };
@@ -186,7 +198,7 @@ async function validarChapeuEFotoAntesDoEnvio(aba, mostrarAviso = true) {
   return imagem.temImagem === true;
 }
 
-async function enviarMateria(aba, mostrarAviso = true) {
+async function enviarMateria(aba, mostrarAviso = true, informarPendencia = () => {}) {
   // Usa o formulário do chapéu, evitando o Enviar do login ou de um modal.
   const campo = localizarCampoChapeu(aba);
   const formulario = campo.locator('xpath=ancestor::form[1]');
@@ -204,17 +216,49 @@ async function enviarMateria(aba, mostrarAviso = true) {
   try {
     limpeza = await prepararImagensAgenciaBrasil(aba);
   } catch (erro) {
-    console.warn(`[AUTOXS] Agência Brasil: não foi possível conferir o corpo; revisão manual necessária. ${erro.message}`);
+    const motivo = `Agência Brasil: não foi possível conferir o corpo; revisão manual necessária. ${erro.message}`;
+    console.warn(`[AUTOXS] ${motivo}`);
+    informarPendencia(motivo);
     return false;
   }
   if (!limpeza.ok) {
-    console.warn(`[AUTOXS] Agência Brasil: ${limpeza.aviso}`);
+    const motivo = `Agência Brasil: ${limpeza.aviso}`;
+    console.warn(`[AUTOXS] ${motivo}`);
+    informarPendencia(motivo);
     return false;
   }
   if (limpeza.removidas) console.log(`[AUTOXS] Agência Brasil: ${limpeza.removidas} imagem(ns) de identificação removida(s) do corpo.`);
+  const corpoEsperado = limpeza.removidas ? await aba.locator('#inp_text, textarea[name="text"]').inputValue() : null;
   const urlInicial = aba.url();
   const action = await formulario.evaluate(form => form.action);
   const mensagensAntes = await aba.locator('.alert-success, .toast-success, [role="status"]').allTextContents();
+  let motivoRequisicao = '';
+  let avisarBloqueio;
+  const bloqueio = new Promise(resolve => { avisarBloqueio = resolve; });
+  const conferirRequisicao = async rota => {
+    const requisicao = rota.request();
+    const destino = new URL(requisicao.url());
+    if (!['POST', 'PUT', 'PATCH'].includes(requisicao.method()) ||
+        destino.origin !== new URL(urlInicial).origin ||
+        ![new URL(action).pathname, new URL(urlInicial).pathname].includes(destino.pathname)) {
+      await rota.continue();
+      return;
+    }
+    try {
+      const html = extrairHtmlRequisicao(requisicao);
+      const verificacao = html === null ? null : await aba.evaluate(analisarImagensAgenciaBrasil, html);
+      if (html === corpoEsperado && verificacao && !verificacao.removidas && !verificacao.ambiguas.length) {
+        await rota.continue();
+        return;
+      }
+      motivoRequisicao = 'Agência Brasil: logotipo ou HTML do corpo não verificável na requisição; revisão manual necessária.';
+    } catch {
+      motivoRequisicao = 'Agência Brasil: falha ao verificar o HTML da requisição; revisão manual necessária.';
+    }
+    await rota.abort('blockedbyclient');
+    avisarBloqueio(null);
+  };
+  if (limpeza.removidas) await aba.route('**/*', conferirRequisicao);
   const respostaPendente = aba.waitForResponse(resposta => {
     const requisicao = resposta.request();
     const destino = new URL(resposta.url());
@@ -222,8 +266,18 @@ async function enviarMateria(aba, mostrarAviso = true) {
       destino.origin === new URL(urlInicial).origin &&
       [new URL(action).pathname, new URL(urlInicial).pathname].includes(destino.pathname);
   }, { timeout: 15000 }).catch(() => null);
-  await enviar.click();
-  const resposta = await respostaPendente;
+  let resposta;
+  try {
+    await enviar.click();
+    resposta = limpeza.removidas ? await Promise.race([respostaPendente, bloqueio]) : await respostaPendente;
+  } finally {
+    if (limpeza.removidas) await aba.unroute('**/*', conferirRequisicao);
+  }
+  if (motivoRequisicao) {
+    console.warn(`[AUTOXS] ${motivoRequisicao}`);
+    informarPendencia(motivoRequisicao);
+    return false;
+  }
   if (!resposta || resposta.status() < 200 || resposta.status() >= 400) return false;
   // Um clique ou resposta HTTP isolada não confirma que a matéria foi salva.
   return confirmarSalvamento(aba, mensagensAntes);
@@ -280,7 +334,7 @@ async function processarLote(materias, operacoes) {
         if (interrompido()) return;
         etapa = 'enviar a matéria após a geração';
         if (!await operacoes.enviar(aba)) {
-          await operacoes.log('  Envio não confirmado. Confira a matéria na aba aberta.');
+          await operacoes.log('  ' + (operacoes.motivoPendencia?.(aba) || 'Envio não confirmado. Confira a matéria na aba aberta.'));
           continue;
         }
         resumo.enviadas++;
@@ -339,7 +393,7 @@ async function processarLote(materias, operacoes) {
           await operacoes.log('  Matéria enviada. Aba fechada.');
           continue;
         }
-        await operacoes.log('  Envio não confirmado. Confira a matéria na aba aberta.');
+        await operacoes.log('  ' + (operacoes.motivoPendencia?.(aba) || 'Envio não confirmado. Confira a matéria na aba aberta.'));
       } else {
         if (estado.temImagem === false) {
           if (podeGerarImagemRJ(estado.categoria, estado.temImagem)) {
@@ -481,6 +535,7 @@ async function executar() {
   const instalarFerramentasEditorais = acompanharFerramentasEditorais(context);
   const sessaoDiscreta = criarSessaoAtualizacaoDiscreta(chromium, path.join(__dirname, 'perfil-atualizacao-discreta'));
   const instaladoresDiscretos = new WeakMap();
+  const motivosEnvio = new WeakMap();
   let encerramentoAutoXS = null;
   let encerrarBuscas = async () => {};
   const encerrarAutoXS = () => {
@@ -812,7 +867,7 @@ async function executar() {
     return registro;
   }
   // As abas pendentes continuam editáveis entre cliques no painel.
-  await criarPainelManual(context, async (progresso, paginaEscolhida, modo = 'discreto') => {
+  await criarPainelManual(context, async (progresso, paginaEscolhida, modo = 'visivel') => {
     if (paginaEscolhida !== 1 && paginaEscolhida !== 2) throw new Error('Escolha Página 1 ou Página 2 antes de atualizar.');
     const discreto = modo === 'discreto';
     const trazerParaFrente = modo === 'visivel';
@@ -887,12 +942,14 @@ async function executar() {
       enviar: async aba => {
         const url = aba.url();
         let confirmado;
-        try { confirmado = await enviarMateria(aba, trazerParaFrente); }
+        motivosEnvio.delete(aba);
+        try { confirmado = await enviarMateria(aba, trazerParaFrente, motivo => motivosEnvio.set(aba, motivo)); }
         catch (erro) { await registrarAtualizacao(materiasPorAba.get(aba), 'erro'); throw erro; }
         await registrarAtualizacao(materiasPorAba.get(aba), confirmado ? 'concluido' : 'naoConfirmado', confirmado ? 'automatico' : null);
         if (confirmado) enviadas.add(url);
         return confirmado;
       },
+      motivoPendencia: aba => motivosEnvio.get(aba),
       pesquisar: abrirPesquisaImagem,
       gerarImagem: (aba, log = progresso) => gerarImagemRJ(aba, verificarImagemDestaque, log),
       ativo: () => contextoTrabalho.pages().length > 0,

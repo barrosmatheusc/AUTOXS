@@ -112,3 +112,17 @@ test('envio manual confirmado é acompanhado e fecha a aba sem botão de continu
   assert.equal(conclusoes, 1);
   assert.equal(fechada, true);
 });
+
+test('pendência da Agência Brasil mostra motivo específico no progresso', async () => {
+  const mensagens = [];
+  const aba = { close:async()=>{}, isClosed:()=>false };
+  const resumo = await processarLote([{ titulo:'Matéria da Agência Brasil', url:'https://cms.test/news/edit/1' }], {
+    ativo:()=>true, log:async texto=>mensagens.push(texto), abrir:async()=>aba,
+    ler:async()=>({ temChapeu:true, temImagem:true }),
+    enviar:async()=>false,
+    motivoPendencia:()=> 'Agência Brasil: logotipo persiste no HTML enviado; revisão manual necessária.'
+  });
+  assert.equal(resumo.enviadas, 0);
+  assert.equal(resumo.pendentes, 1);
+  assert.ok(mensagens.some(texto => texto.includes('Agência Brasil: logotipo persiste no HTML enviado')));
+});

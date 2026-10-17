@@ -80,7 +80,7 @@ test('container independente mostra dia e total de oito dias por responsável', 
   }
 });
 
-test('atalhos do painel inicial abrem a produção sem substituir os controles principais', async () => {
+test('painel inicial mostra produção na mesma janela sem substituir os controles principais', async () => {
   const context = await browser.newContext({ viewport:{ width:390, height:740 } });
   const historico = {
     consultar:async()=>({ estatisticas:{ concluidas:0, atualizacoesAutomaticas:0, finalizadasManualmente:0, adicionadas:0, aguardandoRevisao:0, erros:0 }, compartilh:[], responsaveis:[] }),
@@ -91,13 +91,96 @@ test('atalhos do painel inicial abrem a produção sem substituir os controles p
     const inicial = await criarPainelManual(context, async()=>({ abertas:0, enviadas:0, pendentes:0, erros:0 }), null, undefined, historico);
     assert.equal(await inicial.getByRole('button', { name:'Atualizar', exact:true }).count(), 1);
     assert.equal(await inicial.getByRole('button', { name:'Adicionar matérias', exact:true }).count(), 1);
-    const abertura = context.waitForEvent('page');
-    await inicial.getByRole('button', { name:'Estatísticas', exact:true }).click();
-    const producao = await abertura;
+    const producao = inicial.frameLocator('iframe[title="Produção AutoXS"]');
     await producao.getByText('Matérias concluídas').waitFor();
-    const posicao = await inicial.locator('.atalhos-producao').evaluate(elemento => getComputedStyle(elemento).position);
-    assert.equal(posicao, 'static');
+    assert.equal(context.pages().length, 1);
+    assert.equal(await inicial.locator('.coluna-producao').isVisible(), true);
+    assert.equal(await inicial.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   } finally { await context.close(); }
+});
+
+test('central unificada atualiza estatísticas, atribuições, relatório, data e seções sem duplicar janelas', async () => {
+  const pasta = await fs.mkdtemp(path.join(os.tmpdir(), 'autoxs-central-'));
+  const arquivo = path.join(pasta, 'historico-autoxs.json');
+  const context = await browser.newContext({ viewport:{ width:1300, height:850 } });
+  const historico = criarHistoricoProducao(arquivo, () => new Date('2026-10-15T15:00:00.000Z'));
+  const buscador = { procurarPendentes:async()=>{}, observar:()=>()=>{}, ativas:()=>[], procurar:async()=>({ recuperadas:0 }), cancelar:()=>false };
+  const compartilhamento = { abrir:async()=>{} };
+  let atualizacoes = 0;
+  try {
+    const item = await historico.registrar({ operacao:'adicionar', chave:'central-1', titulo:'Notícia da central',
+      situacao:'concluido', formaConclusao:'manual',
+      urlOriginal:'https://www.tribunadosertao.com.br/cidades/2026/10/15/1234-noticia-da-central' });
+    const inicial = await criarPainelManual(context, async()=>{ atualizacoes++; return { abertas:0,enviadas:1,pendentes:0 }; },
+      null, undefined, historico, compartilhamento, buscador);
+    const producao = inicial.frameLocator('iframe[title="Produção AutoXS"]');
+    const frameProducao = await (await inicial.locator('iframe[title="Produção AutoXS"]').elementHandle()).contentFrame();
+    await producao.locator('#data').fill('2026-10-15');
+    await producao.locator('#data').dispatchEvent('change');
+    await producao.getByText('Matérias concluídas').waitFor();
+    await frameProducao.waitForFunction(() => document.querySelector('#numeros')?.textContent.includes('1'));
+    assert.equal(await producao.locator('#estatisticas').isVisible(), true);
+    assert.equal(await producao.locator('#materias-responsavel').isVisible(), true);
+    assert.equal(await producao.locator('#compartilhaveis').isHidden(), true);
+    await producao.locator('#alternar-links').click();
+    await producao.getByRole('heading', { name:'Notícia da central', exact:true }).waitFor();
+    await producao.getByRole('group', { name:'Responsável por Notícia da central' })
+      .getByRole('button', { name:'Vladimir' }).click();
+    await producao.getByRole('button', { name:'Expandir Notícia da central' }).waitFor();
+    await frameProducao.waitForFunction(() => document.querySelector('#total-dia')?.textContent === '1');
+    assert.equal((await historico.consultar('2026-10-15')).compartilh.find(registro => registro.id === item.id).responsavelId, 'inicial-1');
+    await producao.getByRole('button', { name:'Expandir Notícia da central' }).click();
+    await producao.getByRole('button', { name:'Desfazer seleção' }).click();
+    await frameProducao.waitForFunction(() => document.querySelector('#total-dia')?.textContent === '0');
+    await historico.registrar({ operacao:'adicionar', chave:'central-2', titulo:'Segunda notícia da central',
+      situacao:'concluido', formaConclusao:'manual' });
+    await frameProducao.waitForFunction(() => document.querySelector('#numeros')?.textContent.includes('Matérias concluídas') &&
+      document.querySelector('#numeros .numero strong')?.textContent === '2');
+    await producao.getByRole('heading', { name:'Segunda notícia da central' }).waitFor();
+    await producao.locator('#alternar-relatorio').click();
+    assert.equal(await producao.locator('#relatorio').isVisible(), true);
+    await producao.locator('#data').fill('2026-10-14');
+    await producao.locator('#data').dispatchEvent('change');
+    await producao.getByText('Nenhuma publicação confirmada de Enviar Matérias nesta data.').waitFor();
+    await producao.locator('#data').fill('2026-10-15');
+    await producao.locator('#data').dispatchEvent('change');
+    await producao.getByRole('heading', { name:'Notícia da central', exact:true }).waitFor();
+    assert.equal(context.pages().length, 1);
+    await inicial.getByRole('button', { name:'Atualizar', exact:true }).click();
+    await inicial.getByRole('button', { name:'Página 1' }).click();
+    await inicial.waitForFunction(() => document.querySelector('#enviadas')?.textContent === '1');
+    assert.equal(atualizacoes, 1);
+    await inicial.getByRole('button', { name:'Links de matérias', exact:true }).click();
+    assert.equal(context.pages().length, 1);
+    const nova = context.waitForEvent('page');
+    await inicial.getByRole('button', { name:'Adicionar matérias', exact:true }).click();
+    await nova;
+    for (const largura of [1300, 750, 390]) {
+      await inicial.setViewportSize({ width:largura, height:800 });
+      await inicial.waitForTimeout(50);
+      assert.equal(await inicial.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true,
+        'sem rolagem horizontal em '+largura+'px');
+      const transbordos = await frameProducao.evaluate(() => [...document.querySelectorAll('*')]
+        .filter(el => el.scrollWidth > el.clientWidth + 1)
+        .map(el => ({ tag:el.tagName, id:el.id, classe:el.className, scroll:el.scrollWidth, cliente:el.clientWidth }))
+        .slice(0, 8));
+      const dimensoes = await frameProducao.evaluate(() => ({ rolagem:document.documentElement.scrollWidth, largura:innerWidth, cliente:document.documentElement.clientWidth }));
+      assert.equal(dimensoes.rolagem <= dimensoes.largura, true,
+        'produção sem rolagem horizontal em '+largura+'px: '+JSON.stringify({ transbordos, dimensoes }));
+      let alturaExterna, alturaInterna;
+      for (let tentativa = 0; tentativa < 30; tentativa++) {
+        alturaExterna = await inicial.locator('.coluna-producao iframe').evaluate(el => el.clientHeight);
+        alturaInterna = await frameProducao.evaluate(() => document.documentElement.scrollHeight);
+        if (alturaInterna <= alturaExterna + 2) break;
+        await inicial.waitForTimeout(100);
+      }
+      assert.ok(alturaInterna <= alturaExterna + 2,
+        'produção sem rolagem vertical própria em '+largura+'px: '+alturaInterna+' > '+alturaExterna);
+    }
+  } finally {
+    await context.close();
+    await fs.rm(pasta, { recursive:true, force:true });
+  }
 });
 
 test('Responsáveis inicia recolhido; expandir, cancelar e confirmar remoção preservam atribuição', async () => {

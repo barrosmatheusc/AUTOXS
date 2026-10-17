@@ -1,24 +1,65 @@
 const normalizar = texto => String(texto || '').normalize('NFD')
-  .replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  .replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
 
 // A revisão automática considera apenas os três assuntos excluídos da
 // publicação automática. A ausência de palavras esportivas não é um bloqueio.
 const assuntosRestritos = [
   ['arqueologia', /\barqueolog(?:ia|ic[oa]s?|[oa]s?)\b/, /\barqueolog(?:ia|ic[oa]s?|[oa]s?)\b|\bsitios? arqueologicos?\b/],
-  ['astronomia', /\bastronom(?:ia|ic[oa]s?|[oa]s?)\b/, /\bastronom(?:ia|ic[oa]s?|[oa]s?)\b|\b(?:astrofisica|telescopios?|exoplanetas?|galaxias?|constelacoes?|asteroides?|eclipse(?:s)? (?:solar|lunar))\b/],
-  ['cultura', /\bcultura\b/, /(?:^cultura\b|\b(?:festival|mostra|agenda|programacao|evento|politica|patrimonio|projeto|edital|setor|centro)(?: de| da)? cultura\b|\b(?:festival|mostra|agenda|programacao|evento|politica|patrimonio|projeto|edital|setor|centro) cultur(?:al|ais)\b|\b(?:na|da|para a) cultura\b|\b(?:festival|mostra) (?:de )?(?:musica|cinema|teatro|danca|literatura)\b|\bexposicao (?:de )?(?:arte|fotografia)\b)/]
+  ['astronomia', /\bastronom(?:ia|ic[oa]s?|[oa]s?)\b/, /\bastronom(?:ia|ic[oa]s?|[oa]s?)\b|\b(?:astrofisica|telescopios?|exoplanetas?|galaxias?|constelacoes?|asteroides?|eclipse(?:s)? (?:solar|lunar))\b/]
 ];
 
-function conferirCategoriaEsportes({ categoria, titulo, chapeu }) {
+const tituloEsportivo = /^(?:jogo|partida|time|equipe|clube|atleta|campeonato|torneio|selecao|futebol)\b/;
+const categoriaCultura = /(?:^|\s*[/|>,;-]\s*)cultura(?:$|\s*[/|>,;-]\s*)/;
+const categoriaEsportiva = /^(?:esportes?|vida esportiva)$/;
+const ehCategoriaEsportiva = categoria => categoriaEsportiva.test(normalizar(categoria));
+const mancheteEsportiva = /^(?:(?:a|o|as|os) )?(?:jogo|partida|time|equipe|clube|atletas?|campeonato|torneio|selecao|futebol|basquete|cultura esportiva|prefeitura (?:realiza|promove) torneio)\b/;
+const contextoEsportivo = /\b(?:futebol|basquete|voleibol|natacao|atletas?|times?|equipes?|clubes?|campeonatos?|torneios?|partidas?|modalidades? esportivas?|esportes?)\b/;
+const indicadoresEsportes = [
+  ['astronomia', /\b(?:observatorios? astronomicos?|observatorios? registra|telescopios?|planetas?|galaxias?|descobertas? espaciais?|missoes? espaciais?|astronomia|exoplanetas?)\b/],
+  ['arqueologia', /\b(?:arqueolog(?:ia|icos?|icas?|os?|as?)|escavac(?:ao|oes) arqueologicas?|sitios? arqueologicos?|artefatos? (?:historicos?|em escavac(?:ao|oes))|civilizac(?:ao|oes) antigas?)\b/],
+  ['cultura', /\b(?:festiva(?:l|is) (?:de teatro|culturais?)|teatro|literatura|exposic(?:ao|oes) (?:de arte|artisticas?)|patrimonio cultural|artistas? da regiao)\b/]
+];
+const chapeuRestrito = /^(?:astronomia|arqueologia|cultura)$/;
+
+function revisarEsportes({ titulo, chapeu, subtitulo, conteudo }) {
+  const manchete = normalizar(titulo);
+  const rotulo = normalizar(chapeu);
+  // O assunto expresso pela manchete prevalece sobre menções secundárias,
+  // inclusive quando o chapéu contém uma das palavras restritas.
+  if (mancheteEsportiva.test(manchete)) return { revisar:false, mensagem:'' };
+  const assuntoNoTitulo = indicadoresEsportes.find(([, padrao]) => padrao.test(manchete))?.[0];
+  if (assuntoNoTitulo) return {
+    revisar:true,
+    mensagem:`Revisão editorial: categoria Esportes, mas o título indica ${assuntoNoTitulo} como assunto principal. Confira a categoria antes de enviar.`
+  };
+  const contexto = normalizar(`${subtitulo || ''} ${String(conteudo || '').slice(0, 1800)}`);
+  const assuntoNoContexto = indicadoresEsportes.find(([, padrao]) => padrao.test(contexto))?.[0];
+  const esporteNoContexto = contextoEsportivo.test(contexto);
+  if (assuntoNoContexto) return {
+    revisar:true,
+    mensagem:`Revisão editorial: categoria Esportes, mas ${assuntoNoContexto} aparece no resumo ou início do texto${esporteNoContexto ? ' junto de sinais esportivos' : ''}. Confirme o assunto principal.`
+  };
+  if (chapeuRestrito.test(rotulo) && !esporteNoContexto) return {
+    revisar:true,
+    mensagem:`Revisão editorial: chapéu ${chapeu} conflita com a categoria Esportes e o assunto principal está inconclusivo. Confira antes de enviar.`
+  };
+  return { revisar:false, mensagem:'' };
+}
+
+function conferirCategoriaEsportes({ categoria, titulo, chapeu, subtitulo, conteudo }) {
   const categoriaNormalizada = normalizar(categoria);
+  if (ehCategoriaEsportiva(categoria)) return revisarEsportes({ titulo, chapeu, subtitulo, conteudo });
   const tituloNormalizado = normalizar(titulo);
   const chapeuNormalizado = normalizar(chapeu);
   const assuntos = assuntosRestritos
     .filter(([, categoriaRestrita, tituloRestrito]) =>
       categoriaRestrita.test(categoriaNormalizada) ||
       categoriaRestrita.test(chapeuNormalizado) ||
-      tituloRestrito.test(tituloNormalizado))
+      (!tituloEsportivo.test(tituloNormalizado) && tituloRestrito.test(tituloNormalizado)))
     .map(([nome]) => nome);
+  // Cultura exige classificação editorial explícita; palavras no título ou
+  // chapéu podem descrever esporte, educação, turismo ou outro assunto.
+  if (categoriaCultura.test(categoriaNormalizada)) assuntos.push('cultura');
   if (!assuntos.length) return { revisar: false, mensagem: '' };
   return {
     revisar: true,
@@ -39,4 +80,4 @@ async function mostrarConferenciaCategoria(aba, resultado) {
   }, resultado);
 }
 
-module.exports = { conferirCategoriaEsportes, mostrarConferenciaCategoria };
+module.exports = { conferirCategoriaEsportes, mostrarConferenciaCategoria, ehCategoriaEsportiva };

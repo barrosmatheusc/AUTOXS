@@ -24,7 +24,7 @@ async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao 
 
   await painel.exposeBinding('atualizarMaterias', async ({ frame }, escolha) => {
     const paginaEscolhida = typeof escolha === 'number' ? escolha : escolha?.pagina;
-    const modo = typeof escolha === 'number' ? 'discreto' : escolha?.modo;
+    const modo = typeof escolha === 'number' ? 'visivel' : escolha?.modo;
     if (frame !== painel.mainFrame() || frame.url() !== url) return {ok:false,mensagem:'Abra o painel local para atualizar.'};
     if (emAndamento) return {ok:false,mensagem:'Uma conferência já está em andamento.'};
     if (paginaEscolhida !== 1 && paginaEscolhida !== 2) return {ok:false,mensagem:'Escolha Página 1 ou Página 2 antes de atualizar.'};
@@ -121,13 +121,13 @@ async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao 
       return {ok:true};
     } catch (erro) { return {ok:false,mensagem:erro.message || 'Não foi possível abrir as matérias para compartilhamento.'}; }
   });
-  await painel.exposeBinding('abrirPainelProducao', async ({ frame }, aba) => {
-    if (frame !== painel.mainFrame() || frame.url() !== url) return {ok:false,mensagem:'Abra o painel inicial.'};
-    if (!producao) return {ok:false,mensagem:'Histórico de produção indisponível nesta sessão.'};
-    try { await producao.abrir(aba); return {ok:true}; }
-    catch (erro) { return {ok:false,mensagem:erro.message || 'Não foi possível abrir a produção.'}; }
-  });
+  if (producao) await producao.integrar(painel);
   await painel.goto(url);
+  await painel.evaluate(temHistorico => {
+    const coluna = document.querySelector('.coluna-producao');
+    if (temHistorico) coluna.querySelector('iframe').src = 'painel-producao.html?integrado=1';
+    else coluna.hidden = true;
+  }, Boolean(producao));
   await painel.bringToFront();
   return painel;
 }

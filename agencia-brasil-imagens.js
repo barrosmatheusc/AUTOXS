@@ -66,7 +66,10 @@ async function prepararImagensAgenciaBrasil(aba) {
   // O HTML submetido pelo formulário pode estar defasado em relação ao editor.
   // Confira as duas representações antes de considerar a limpeza concluída.
   const campoTexto = aba.locator('#inp_text, textarea[name="text"]');
-  const htmlFormulario = await campoTexto.count() === 1 ? await campoTexto.inputValue() : '';
+  if (await campoTexto.count() !== 1) {
+    return { ok: false, removidas: 0, aviso: 'Campo HTML enviado pelo formulário não identificado; revisão manual necessária.' };
+  }
+  const htmlFormulario = await campoTexto.inputValue();
   const formulario = htmlFormulario ? await aba.evaluate(analisarImagensAgenciaBrasil, htmlFormulario) : null;
   if (formulario?.ambiguas.length) {
     return { ok: false, removidas: 0, aviso: 'Imagem ambígua no HTML da matéria; revisão manual necessária.' };
@@ -75,33 +78,77 @@ async function prepararImagensAgenciaBrasil(aba) {
   if (!fonteAberta) {
     previa = await aba.evaluate(analisarImagensAgenciaBrasil, await editor.innerHTML());
     if (previa.ambiguas.length) return { ok: false, removidas: 0, aviso: 'Imagem possivelmente ligada à Agência Brasil no corpo; revisão manual necessária.' };
-    if (formulario?.removidas && !previa.removidas) {
-      return { ok: false, removidas: 0, aviso: 'Logotipo presente no HTML do formulário, mas ausente no editor; revisão manual necessária.' };
-    }
     if (!previa.removidas && !formulario?.removidas) return { ok: true, removidas: 0 };
     await alternar.click();
     await fonte.waitFor({ state: 'visible' });
   }
   const original = await fonte.inputValue();
   const resultado = await aba.evaluate(analisarImagensAgenciaBrasil, original);
-  if (resultado.ambiguas.length || ((previa?.removidas || formulario?.removidas) && !resultado.removidas)) {
-    if (!fonteAberta) await alternar.click();
+  if (resultado.ambiguas.length || (previa?.removidas && !resultado.removidas)) {
     return { ok: false, removidas: 0, aviso: 'Identificação da imagem não é consistente no editor HTML; revisão manual necessária.' };
   }
-  if (!resultado.removidas) {
+  if (!resultado.removidas && !formulario?.removidas) {
     if (!fonteAberta) await alternar.click();
     return { ok: true, removidas: 0 };
   }
-  await fonte.fill(resultado.html);
+  // O campo submetido pode conservar uma cópia antiga do HTML. Só sincronize
+  // quando sua versão sem logotipo for idêntica à fonte do editor.
+  if (formulario?.removidas && formulario.html.trim() !== resultado.html.trim()) {
+    return { ok: false, removidas: 0, aviso: 'Corpo visual e HTML do formulário divergem além do logotipo; revisão manual necessária.' };
+  }
+  if (resultado.removidas) await fonte.fill(resultado.html);
   await alternar.click();
   await editor.waitFor({ state: 'visible' });
-  const depois = await aba.evaluate(analisarImagensAgenciaBrasil, await editor.innerHTML());
-  const htmlEnviado = await campoTexto.count() === 1 ? await campoTexto.inputValue() : '';
-  const persistido = htmlEnviado ? await aba.evaluate(analisarImagensAgenciaBrasil, htmlEnviado) : null;
-  if (depois.removidas || depois.ambiguas.length || persistido?.removidas || persistido?.ambiguas.length) {
-    return { ok: false, removidas: resultado.removidas, aviso: 'Não foi possível confirmar a limpeza no editor; revisão manual necessária.' };
+  let htmlEnviado = await campoTexto.inputValue();
+  let persistido = await aba.evaluate(analisarImagensAgenciaBrasil, htmlEnviado);
+  if (persistido.removidas && persistido.html.trim() === resultado.html.trim()) {
+    await campoTexto.evaluate((campo, html) => {
+      campo.value = html;
+      campo.dispatchEvent(new Event('input', { bubbles:true }));
+      campo.dispatchEvent(new Event('change', { bubbles:true }));
+    }, resultado.html);
+    htmlEnviado = await campoTexto.inputValue();
+    persistido = await aba.evaluate(analisarImagensAgenciaBrasil, htmlEnviado);
   }
-  return { ok: true, removidas: resultado.removidas };
+  const depois = await aba.evaluate(analisarImagensAgenciaBrasil, await editor.innerHTML());
+  if (depois.removidas || depois.ambiguas.length || persistido.removidas || persistido.ambiguas.length ||
+      persistido.html.trim() !== resultado.html.trim()) {
+    return { ok: false, removidas: resultado.removidas, aviso: 'Logotipo ou divergência persiste no HTML enviado pelo formulário; revisão manual necessária.' };
+  }
+  const corpoDoFormulario = await campoTexto.evaluate(campo => {
+    const formulario = campo.closest('form');
+    if (!formulario || !campo.name) return null;
+    const valores = new FormData(formulario).getAll(campo.name);
+    return valores.length === 1 ? valores[0] : null;
+  });
+  if (corpoDoFormulario !== resultado.html) {
+    return { ok: false, removidas: resultado.removidas, aviso: 'Não foi possível confirmar o HTML que o formulário enviará; revisão manual necessária.' };
+  }
+  return { ok: true, removidas: resultado.removidas || formulario?.removidas || 0 };
 }
 
-module.exports = { analisarImagensAgenciaBrasil, prepararImagensAgenciaBrasil };
+function extrairHtmlRequisicao(requisicao) {
+  const cabecalho = String(requisicao.headers()['content-type'] || '');
+  const tipo = cabecalho.toLowerCase();
+  const corpo = requisicao.postData();
+  if (typeof corpo !== 'string') return null;
+  if (tipo.includes('application/x-www-form-urlencoded')) return new URLSearchParams(corpo).get('text');
+  if (tipo.includes('application/json')) {
+    try {
+      const dados = JSON.parse(corpo);
+      return typeof dados?.text === 'string' ? dados.text : null;
+    } catch { return null; }
+  }
+  if (tipo.includes('multipart/form-data')) {
+    const limite = /boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(cabecalho)?.slice(1).find(Boolean);
+    if (!limite) return null;
+    for (const parte of corpo.split(`--${limite}`)) {
+      const separador = parte.indexOf('\r\n\r\n');
+      if (separador < 0 || !/^content-disposition:[^\r\n]*\bname="text"/im.test(parte.slice(0, separador))) continue;
+      return parte.slice(separador + 4).replace(/\r\n$/, '');
+    }
+  }
+  return null;
+}
+
+module.exports = { analisarImagensAgenciaBrasil, prepararImagensAgenciaBrasil, extrairHtmlRequisicao };

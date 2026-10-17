@@ -23,8 +23,20 @@ input[type="date"]{min-width:180px}.painel{background:#1b2824;border:1px solid #
 .gestao{margin-top:24px;border-top:1px solid #456353;padding-top:18px}.gestao-linha{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}.gestao-linha input{width:180px}
 .gestao-cabecalho{margin:0}.gestao-alternar{display:flex;align-items:center;gap:12px;width:100%;padding:2px 0;border:0;background:transparent;text-align:left;font-size:22px}.gestao-alternar:hover:not(:disabled){background:transparent;color:#a2edc5}.gestao-quantidade{margin-left:auto;color:#bdd0c3;font-size:14px}.gestao-icone{font-size:20px}.gestao-conteudo{margin-top:14px}.gestao-conteudo[hidden]{display:none}.confirmar-remocao{display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%;color:#ffe2a5}
 #status{min-height:24px}a{color:#a2edc5}.revisao{margin-top:18px}
+.controle-secao{display:none;width:100%;margin-top:14px;padding:15px 20px;text-align:left;font-size:18px;border-radius:14px}
+.integrado{padding:0;min-height:0;background:transparent;overflow-x:hidden}
+.integrado main{max-width:none;min-width:0}
+.integrado .abas{display:none}
+.integrado .controle-secao{display:block}
+.integrado .painel{margin-top:12px;padding:18px}
+.integrado .grade{grid-template-columns:repeat(2,minmax(0,1fr))}
+.integrado .numero{padding:14px}
+.integrado .numero strong{font-size:25px}
+.integrado .topo h1{font-size:26px}
+.integrado p{overflow-wrap:anywhere}
 @media(max-width:720px){body{padding:14px}.painel{padding:18px}.grade{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:440px){.grade,.resumo-responsaveis{grid-template-columns:1fr}.abas button{flex:1 1 100%}.materia-responsavel{max-width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+@media(max-width:440px){.integrado .grade{grid-template-columns:repeat(2,minmax(0,1fr))}.integrado .resumo-responsaveis{grid-template-columns:1fr}}
 </style>
 </head>
 <body><main>
@@ -37,11 +49,23 @@ input[type="date"]{min-width:180px}.painel{background:#1b2824;border:1px solid #
   <p id="status" role="status" aria-live="polite"></p>
   <section id="estatisticas" class="painel"><h2>Estatísticas do dia</h2><div id="numeros" class="grade"></div><p>Registros anteriores ao início deste histórico não são estimados.</p></section>
   <section id="materias-responsavel" class="painel"><h2>Matérias por Responsável</h2><div class="resumo-responsaveis"><div><h3>Dia selecionado</h3><div id="contagem-dia"></div><p class="resumo-total">Total: <strong id="total-dia">0</strong> matérias</p></div><div><h3>Histórico disponível (8 dias)</h3><div id="contagem-periodo"></div><p class="resumo-total">Total atribuído: <strong id="total-periodo">0</strong> matérias</p></div></div></section>
+  <button id="alternar-links" class="controle-secao" type="button" aria-expanded="false" aria-controls="compartilhaveis">Seleção de Links ▸</button>
   <section id="compartilhaveis" class="painel" hidden><div class="titulo-lista"><h2>Matérias publicadas por Enviar Matérias</h2><button id="alternar-materias" class="alternar-materias" type="button" hidden>Expandir selecionadas</button></div><p>Escolha um responsável depois da publicação. O AutoXS procura o link em Links de matérias; se ele continuar pendente, você pode informar a URL original.</p><div id="lista" class="lista"></div><div class="gestao"><h2 class="gestao-cabecalho"><button id="alternar-responsaveis" class="gestao-alternar" type="button" aria-expanded="false" aria-controls="conteudo-responsaveis"><span>Responsáveis</span><span id="quantidade-responsaveis" class="gestao-quantidade">0 nomes</span><span id="icone-responsaveis" class="gestao-icone" aria-hidden="true">▸</span></button></h2><div id="conteudo-responsaveis" class="gestao-conteudo" hidden><div id="gestao"></div><div class="barra"><input id="novo-responsavel" aria-label="Nome do novo responsável" placeholder="Novo responsável" maxlength="60"><button id="adicionar-responsavel" type="button">Adicionar</button></div></div></div></section>
+  <button id="alternar-relatorio" class="controle-secao" type="button" aria-expanded="false" aria-controls="relatorio">Relatório de Links ▸</button>
   <section id="relatorio" class="painel" hidden><h2>Relatório diário de links</h2><p>Somente URLs originais de matérias publicadas por Enviar Matérias. Confira antes de compartilhar.</p><div class="barra"><button id="copiar-relatorio" class="principal" type="button">Copiar relatório inteiro</button></div><div id="texto-relatorio" class="saida"></div><div class="revisao"><h3>Para revisão</h3><div id="pendencias-relatorio"></div></div></section>
 </main>
 <script>
 const $ = seletor => document.querySelector(seletor);
+const integrado = new URLSearchParams(location.search).get('integrado') === '1';
+if(integrado){
+  document.body.classList.add('integrado');
+  const principal=document.querySelector('main');
+  const avisarAltura=()=>window.parent.postMessage({tipo:'autoxs-producao-altura',altura:Math.ceil(Math.max(principal.scrollHeight,principal.getBoundingClientRect().height))+64},'*');
+  new ResizeObserver(avisarAltura).observe(principal);
+  new MutationObserver(()=>requestAnimationFrame(avisarAltura)).observe(principal,{subtree:true,childList:true,characterData:true,attributes:true});
+  window.addEventListener('resize',avisarAltura);
+  window.addEventListener('load',avisarAltura);
+}
 let dados = null, abaAtual = 'estatisticas', relatorioAtual = null, contagemResponsaveis = null;
 const procuras = new Map();
 const cartoesExpandidos = new Set();
@@ -91,7 +115,8 @@ function desenharRelatorio(){const saida=$('#texto-relatorio');saida.textContent
 async function carregar(){recado('Carregando produção…');try{dados=await chamar('consultar',{data:$('#data').value});contagemResponsaveis=await chamar('materiasPorResponsavel',{data:$('#data').value});relatorioAtual=await chamar('relatorio',{data:$('#data').value});desenharEstatisticas();desenharContagem();desenharLista();desenharGestao();desenharRelatorio();recado('Dados atualizados.');return true;}catch(erro){recado(erro.message,true);return false;}}
 window.atualizarProducao=()=>void carregar();
 window.atualizarProgressoProcura=evento=>{if(!evento?.id)return;if(['procurando','cancelando'].includes(evento.estado))procuras.set(evento.id,evento);else procuras.delete(evento.id);if(dados)desenharLista();};
-window.mostrarAba=nome=>{if(!['estatisticas','compartilhaveis','relatorio'].includes(nome))nome='estatisticas';abaAtual=nome;document.querySelectorAll('[data-aba]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.aba===nome)));for(const id of ['estatisticas','compartilhaveis','relatorio'])$('#'+id).hidden=id!==nome;$('#materias-responsavel').hidden=nome!=='estatisticas';void carregar();};
+window.mostrarAba=nome=>{if(!['estatisticas','compartilhaveis','relatorio'].includes(nome))nome='estatisticas';abaAtual=nome;if(integrado){if(nome!=='estatisticas'){$('#'+nome).hidden=false;const botao=$('#'+(nome==='compartilhaveis'?'alternar-links':'alternar-relatorio'));botao.setAttribute('aria-expanded','true');botao.textContent=(nome==='compartilhaveis'?'Seleção de Links':'Relatório de Links')+' ▾';}return void carregar();}document.querySelectorAll('[data-aba]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.aba===nome)));for(const id of ['estatisticas','compartilhaveis','relatorio'])$('#'+id).hidden=id!==nome;$('#materias-responsavel').hidden=nome!=='estatisticas';void carregar();};
+for(const [botaoId,secaoId,nome] of [['alternar-links','compartilhaveis','Seleção de Links'],['alternar-relatorio','relatorio','Relatório de Links']]){$('#'+botaoId).addEventListener('click',()=>{const secao=$('#'+secaoId);secao.hidden=!secao.hidden;$('#'+botaoId).setAttribute('aria-expanded',String(!secao.hidden));$('#'+botaoId).textContent=nome+(secao.hidden?' ▸':' ▾');});}
 document.querySelectorAll('[data-aba]').forEach(b=>b.addEventListener('click',()=>window.mostrarAba(b.dataset.aba)));
 $('#alternar-materias').addEventListener('click',()=>{const selecionadas=dados?.compartilh.filter(item=>item.responsavelId)||[];if(selecionadas.some(item=>!cartoesExpandidos.has(item.id))){for(const item of selecionadas)cartoesExpandidos.add(item.id);}else{for(const item of selecionadas)cartoesExpandidos.delete(item.id);}desenharLista();});
 $('#alternar-responsaveis').addEventListener('click',()=>{const conteudo=$('#conteudo-responsaveis');conteudo.hidden=!conteudo.hidden;$('#alternar-responsaveis').setAttribute('aria-expanded',String(!conteudo.hidden));$('#icone-responsaveis').textContent=conteudo.hidden?'▸':'▾';});

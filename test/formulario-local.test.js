@@ -18,6 +18,10 @@ async function paginaLocal({ rotulo = 'Chapéu (opcional)', nome = 'campo', valo
     <div><button type="button">+</button></div>
     ${foto ? `<div><img width="200" height="120" src="data:image/svg+xml,${svg}"></div>` : ''}
     <div><button type="button">+</button></div>
+    <textarea id="inp_text" name="text" hidden></textarea>
+    <a href="#" data-command="source.toggle">HTML</a>
+    <div class="rx-editor" contenteditable="true"><p>Corpo de teste preservado.</p></div>
+    <textarea class="rx-source" hidden></textarea>
     <button type="submit">${icone ? '<i></i> ' : ''}${botao}</button>
     </form></body></html>`;
   // Todas as requisições são atendidas em memória. Nenhum acesso ao CMS/rede.
@@ -45,7 +49,7 @@ test('campo real: reconhece rótulos variados e nome/id, ignorando campo oculto'
       const cargas = new WeakMap([[page, Promise.resolve({ erro: null })]]);
       await prepararAbaMateria(page, cargas);
       assert.equal(await localizarCampoChapeu(page).inputValue(), 'Política');
-      assert.deepEqual(await lerPendencias(page), { temChapeu: true, temImagem: true, categoria: '' });
+      assert.deepEqual(await lerPendencias(page), { temChapeu: true, temImagem: true, categoria: '', conferenciaCategoria: { revisar: false, mensagem: '' } });
     } finally { await context.close(); }
   }
 });

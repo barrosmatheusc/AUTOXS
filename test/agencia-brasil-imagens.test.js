@@ -1,7 +1,7 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
-const { analisarImagensAgenciaBrasil, prepararImagensAgenciaBrasil } = require('../agencia-brasil-imagens');
+const { analisarImagensAgenciaBrasil, prepararImagensAgenciaBrasil, extrairHtmlRequisicao } = require('../agencia-brasil-imagens');
 const { processarLote } = require('../autoxs');
 
 let browser;
@@ -43,6 +43,18 @@ async function paginaComCorpo(html) {
 const logo = '<img src="/uploads/logo-agencia-brasil.png" alt="Logotipo da Agência Brasil">';
 const foto = '<figure><img src="/uploads/reportagem.jpg" alt="Foto: Agência Brasil"><figcaption>Registro da reportagem</figcaption></figure>';
 const logoReal = '<figure data-rx-type="image"><a href="https://agenciabrasil.ebc.com.br/"><img src="/uploads/logo-agenciabrasil.svg" alt="Logo Agência Brasil"></a></figure>';
+
+test('extrai o HTML real da requisição sem confundir outros campos', () => {
+  const html = '<p>Texto & <strong>formatação</strong>.</p>';
+  const requisicao = (tipo, corpo) => ({ headers:() => ({ 'content-type':tipo }), postData:() => corpo });
+  assert.equal(extrairHtmlRequisicao(requisicao('application/x-www-form-urlencoded',
+    new URLSearchParams({ title:'Outra matéria', text:html }).toString())), html);
+  assert.equal(extrairHtmlRequisicao(requisicao('application/json', JSON.stringify({ text:html }))), html);
+  const multipart = `--AbC123\r\nContent-Disposition: form-data; name="title"\r\n\r\nOutro título\r\n` +
+    `--AbC123\r\nContent-Disposition: form-data; name="text"\r\n\r\n${html}\r\n--AbC123--\r\n`;
+  assert.equal(extrairHtmlRequisicao(requisicao('multipart/form-data; boundary=AbC123', multipart)), html);
+  assert.equal(extrairHtmlRequisicao(requisicao('application/json', JSON.stringify({ title:'Sem corpo' }))), null);
+});
 
 test('remove apenas logotipo inequívoco e preserva texto, link, formatação e destaque', async () => {
   const page = await paginaComCorpo(`<p><strong>Texto</strong> com <a href="https://exemplo.test/noticia">link</a>.</p>${logo}<p>Fim.</p>`);
@@ -176,17 +188,48 @@ test('figure com legenda ou conteúdo editorial adicional não é alterado autom
   } finally { await page.close(); }
 });
 
-test('HTML do formulário com logotipo divergente do editor impede o envio', async () => {
+test('HTML antigo do formulário é sincronizado quando só diverge pelo logotipo', async () => {
   const corpoVisivel = '<p><strong>Notícia</strong> sem logotipo visível.</p>';
   const corpoEnviado = `${corpoVisivel}${logoReal}`;
   const page = await paginaComCorpo(corpoVisivel);
   try {
     await page.locator('#inp_text').evaluate((elemento, conteudo) => { elemento.value = conteudo; }, corpoEnviado);
     const resultado = await prepararImagensAgenciaBrasil(page);
-    assert.equal(resultado.ok, false);
-    assert.match(resultado.aviso, /revisão manual/i);
+    assert.deepEqual(resultado, { ok: true, removidas: 1 });
     assert.equal(await page.locator('.rx-editor').innerHTML(), corpoVisivel);
+    assert.equal(await page.locator('#inp_text').inputValue(), corpoVisivel);
+    assert.equal(await page.locator('form').evaluate(form => new FormData(form).get('text')), corpoVisivel);
+    assert.equal(await page.locator('#imagem-destaque').getAttribute('src'), '/destaque.jpg');
+  } finally { await page.close(); }
+});
+
+test('HTML do formulário com conteúdo editorial divergente permanece pendente', async () => {
+  const corpoVisivel = '<p>Texto atual do editor.</p>';
+  const corpoEnviado = '<p>Outro texto editorial.</p>' + logoReal;
+  const page = await paginaComCorpo(corpoVisivel);
+  try {
+    await page.locator('#inp_text').evaluate((elemento, conteudo) => { elemento.value = conteudo; }, corpoEnviado);
+    const resultado = await prepararImagensAgenciaBrasil(page);
+    assert.equal(resultado.ok, false);
+    assert.match(resultado.aviso, /divergem|revisão manual/i);
     assert.equal(await page.locator('#inp_text').inputValue(), corpoEnviado);
+    assert.equal(await page.locator('#imagem-destaque').getAttribute('src'), '/destaque.jpg');
+  } finally { await page.close(); }
+});
+
+test('editor que restaura o logotipo no campo enviado impede a conclusão', async () => {
+  const page = await paginaComCorpo(logoReal);
+  try {
+    await page.locator('a[data-command="source.toggle"]').evaluate((botao, logoHtml) => {
+      botao.addEventListener('click', () => {
+        if (document.querySelector('.rx-source').hidden) document.querySelector('#inp_text').value += logoHtml;
+      });
+      document.querySelector('#inp_text').addEventListener('change', event => { event.target.value += logoHtml; });
+    }, logoReal);
+    const resultado = await prepararImagensAgenciaBrasil(page);
+    assert.equal(resultado.ok, false);
+    assert.match(resultado.aviso, /Logotipo.*persiste|revisão manual/i);
+    assert.match(await page.locator('#inp_text').inputValue(), /logo-agenciabrasil\.svg/);
     assert.equal(await page.locator('#imagem-destaque').getAttribute('src'), '/destaque.jpg');
   } finally { await page.close(); }
 });
