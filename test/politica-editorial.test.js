@@ -67,6 +67,27 @@ test('assunto principal inequívoco em Esportes pede mudança para Geral', () =>
   }
 });
 
+test('manchete de assunto restrito não é anulada por menção esportiva incidental no corpo', () => {
+  for (const [titulo, assunto] of [
+    ['Observatório registra descoberta de novo planeta', 'astronomia'],
+    ['Pesquisadores encontram artefatos em escavação arqueológica', 'arqueologia'],
+    ['Festival de teatro anuncia programação cultural', 'cultura']
+  ]) {
+    const resultado = conferirCategoriaEsportes({ categoria:'Esportes', chapeu:'DESTAQUE', titulo,
+      conteudo:'Ao fim do evento, atletas de futebol participaram de uma atividade paralela.' });
+    assert.equal(resultado.revisar, false, titulo);
+    assert.equal(resultado.categoriaDestino, 'Geral', titulo);
+    assert.equal(resultado.assunto, assunto);
+  }
+});
+
+test('conflito no próprio título permanece para revisão humana', () => {
+  const resultado = conferirCategoriaEsportes({ categoria:'Esportes', chapeu:'DESTAQUE',
+    titulo:'Festival de teatro e campeonato de futebol são anunciados' });
+  assert.equal(resultado.revisar, true);
+  assert.match(resultado.mensagem, /conflitantes/);
+});
+
 test('menções culturais incidentais em manchetes esportivas não bloqueiam', () => {
   for (const titulo of [
     'Campeonato de futebol é realizado durante festival cultural',

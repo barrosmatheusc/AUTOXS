@@ -1,7 +1,7 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
-const { analisarImagensAgenciaBrasil, prepararImagensAgenciaBrasil, extrairHtmlRequisicao } = require('../agencia-brasil-imagens');
+const { analisarImagensAgenciaBrasil, compararCorposAgenciaBrasil, prepararImagensAgenciaBrasil, extrairHtmlRequisicao } = require('../agencia-brasil-imagens');
 const { processarLote } = require('../autoxs');
 
 let browser;
@@ -226,6 +226,60 @@ test('HTML antigo do formulário é sincronizado quando só diverge pelo logotip
     assert.equal(await page.locator('#inp_text').inputValue(), corpoVisivel);
     assert.equal(await page.locator('form').evaluate(form => new FormData(form).get('text')), corpoVisivel);
     assert.equal(await page.locator('#imagem-destaque').getAttribute('src'), '/destaque.jpg');
+  } finally { await page.close(); }
+});
+
+test('serializações equivalentes do editor e formulário não bloqueiam a remoção', async () => {
+  const visual = `<p class="redacao destaque" style="color: rgb(1, 2, 3); text-align: center"><a href="https://exemplo.test/original?a=1&amp;b=2" target="_BLANK">Texto &amp; <strong>formatação</strong></a></p>${logoSemTipo}`;
+  const formulario = `<p style="text-align:center;color:rgb(1, 2, 3)" class="destaque redacao"><a target="_blank" href="https://exemplo.test/original?a=1&amp;b=2">Texto &#38; <strong>formatação</strong></a></p>\n${logoSemTipo}`;
+  const page = await paginaComCorpo(visual);
+  try {
+    await page.locator('#inp_text').evaluate((campo, html) => { campo.value = html; }, formulario);
+    const resultado = await prepararImagensAgenciaBrasil(page);
+    assert.equal(resultado.ok, true, resultado.aviso);
+    assert.equal(resultado.removidas, 1);
+    const enviado = await page.locator('form').evaluate(form => new FormData(form).get('text'));
+    assert.doesNotMatch(enviado, /logo-agenciabrasil\.svg/);
+    assert.match(enviado, /href="https:\/\/exemplo\.test\/original\?a=1&amp;b=2"/);
+  } finally { await page.close(); }
+});
+
+test('atributos internos observados no Redactor não geram falsa divergência', async () => {
+  const visual = '<p data-rx-type="text" data-rx-first-level="true">Texto <strong>preservado</strong>.</p>' +
+    '<figure data-rx-type="image" data-rx-first-level="true" contenteditable="false" style="text-align:center">' +
+    '<a class="" href="https://agenciabrasil.ebc.com.br/noticia"><img alt="Logo Agência Brasil" src="/logo-agenciabrasil.svg" data-rx-style-cache="height:54px"></a></figure>' +
+    '<p data-rx-type="text" data-rx-first-level="true"><img src="/foto-legitima.jpg" data-rx-style-cache="width:100px"></p>';
+  const formulario = '<p>Texto <strong>preservado</strong>.</p>' +
+    '<figure style="text-align:center"><a href="https://agenciabrasil.ebc.com.br/noticia"><img alt="Logo Agência Brasil" src="/logo-agenciabrasil.svg"></a></figure>' +
+    '<p><img src="/foto-legitima.jpg"></p>';
+  const page = await paginaComCorpo(visual);
+  try {
+    await page.locator('#inp_text').evaluate((campo, html) => { campo.value = html; }, formulario);
+    const resultado = await prepararImagensAgenciaBrasil(page);
+    assert.equal(resultado.ok, true, resultado.aviso);
+    assert.equal(resultado.removidas, 1);
+    const enviado = await page.locator('form').evaluate(form => new FormData(form).get('text'));
+    assert.doesNotMatch(enviado, /logo-agenciabrasil\.svg/);
+    assert.match(enviado, /foto-legitima\.jpg/);
+    assert.match(enviado, /<strong>preservado<\/strong>/);
+  } finally { await page.close(); }
+});
+
+test('comparação estrutural preserva diferenças de texto, foto, legenda e destino de link', async () => {
+  const page = await paginaComCorpo('<p>Teste.</p>');
+  try {
+    const original = '<p><a href="https://exemplo.test/a">Texto</a></p><figure><img src="/foto.jpg"><figcaption>Legenda</figcaption></figure>';
+    for (const alterado of [
+      original.replace('Texto', 'Outro texto'),
+      original.replace('/foto.jpg', '/outra-foto.jpg'),
+      original.replace('Legenda', 'Outra legenda'),
+      original.replace('exemplo.test/a', 'exemplo.test/b'),
+      original.replace('<figure>', '<figure data-editorial-id="novo">')
+    ]) {
+      const resultado = await page.evaluate(compararCorposAgenciaBrasil, { primeiro:original, segundo:alterado });
+      assert.equal(resultado.equivalentes, false, alterado);
+      assert.ok(resultado.motivo);
+    }
   } finally { await page.close(); }
 });
 

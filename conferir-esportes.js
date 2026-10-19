@@ -15,9 +15,9 @@ const ehCategoriaEsportiva = categoria => categoriaEsportiva.test(normalizar(cat
 const mancheteEsportiva = /^(?:(?:a|o|as|os) )?(?:jogo|partida|time|equipe|clube|atletas?|campeonato|torneio|selecao|futebol|basquete|cultura esportiva|prefeitura (?:realiza|promove) torneio)\b/;
 const contextoEsportivo = /\b(?:futebol|basquete|voleibol|natacao|atletas?|times?|equipes?|clubes?|campeonatos?|torneios?|partidas?|modalidades? esportivas?|esportes?)\b/;
 const indicadoresEsportes = [
-  ['astronomia', /\b(?:observatorios? astronomicos?|observatorios? registra|telescopios?|planetas?|galaxias?|descobertas? espaciais?|missoes? espaciais?|astronomia|exoplanetas?)\b/],
+  ['astronomia', /\b(?:observatorios? astronomicos?|observatorios? registra|telescopios?|planetas?|galaxias?|eclipses?|descobertas? espaciais?|missoes? espaciais?|astronomia|exoplanetas?)\b/],
   ['arqueologia', /\b(?:arqueolog(?:ia|icos?|icas?|os?|as?)|escavac(?:ao|oes) arqueologicas?|sitios? arqueologicos?|artefatos? (?:historicos?|em escavac(?:ao|oes))|civilizac(?:ao|oes) antigas?)\b/],
-  ['cultura', /\b(?:festiva(?:l|is) (?:de teatro|culturais?)|teatro|literatura|exposic(?:ao|oes) (?:de arte|artisticas?)|patrimonio cultural|artistas? da regiao)\b/]
+  ['cultura', /\b(?:festiva(?:l|is) (?:de teatro|culturais?)|teatro|literatura|cinema|filmes?|musica|exposic(?:ao|oes) (?:de arte|artisticas?)|patrimonio cultural|artistas? da regiao)\b/]
 ];
 const chapeuRestrito = /^(?:astronomia|arqueologia|cultura)$/;
 
@@ -34,10 +34,15 @@ function revisarEsportes({ titulo, chapeu, subtitulo, conteudo }) {
   const esporteNoTitulo = contextoEsportivo.test(manchete);
   const esporteNoContexto = contextoEsportivo.test(contexto);
   const chapeuEsportivo = contextoEsportivo.test(rotulo);
-  const assuntoPrincipal = assuntosNoTitulo.length === 1 ? assuntosNoTitulo[0] :
+  const assuntoClaroNoTitulo = assuntosNoTitulo.length === 1 && !esporteNoTitulo;
+  const assuntoPrincipal = assuntoClaroNoTitulo ? assuntosNoTitulo[0] :
     chapeuRestrito.test(rotulo) && assuntosNoContexto.length === 1 &&
-    assuntosNoContexto[0] === rotulo ? rotulo : '';
-  if (assuntoPrincipal && !esporteNoTitulo && !esporteNoContexto && !chapeuEsportivo &&
+    assuntosNoContexto[0] === rotulo && !esporteNoContexto ? rotulo : '';
+  // Uma menção esportiva isolada no corpo não anula uma manchete claramente
+  // astronômica, arqueológica ou cultural. Conflito na própria manchete ou no
+  // chapéu ainda exige revisão humana.
+  if (assuntoPrincipal && !esporteNoTitulo && !chapeuEsportivo &&
+      (assuntoClaroNoTitulo || !esporteNoContexto) &&
       !assuntosNoTitulo.some(assunto => assunto !== assuntoPrincipal) &&
       !assuntosNoContexto.some(assunto => assunto !== assuntoPrincipal) &&
       (!chapeuRestrito.test(rotulo) || rotulo === assuntoPrincipal)) return {

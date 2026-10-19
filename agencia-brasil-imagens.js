@@ -60,6 +60,82 @@ function analisarImagensAgenciaBrasil(html) {
   };
 }
 
+// Compara o conteúdo editorial, não os bytes de serializações diferentes do
+// mesmo DOM. Conserva destinos de links, imagens, legendas, mídia e atributos;
+// somente ordem de atributos, entidades e espaços de formatação são neutros.
+function compararCorposAgenciaBrasil({ primeiro, segundo }) {
+  const blocos = new Set(['ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'DIV', 'FIGCAPTION',
+    'FIGURE', 'FOOTER', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HEADER', 'HR', 'LI', 'OL', 'P',
+    'SECTION', 'TABLE', 'TBODY', 'TD', 'TH', 'THEAD', 'TR', 'UL']);
+  const preservarEspacos = new Set(['PRE', 'CODE', 'SCRIPT', 'STYLE', 'TEXTAREA']);
+  const modelo = html => {
+    const template = document.createElement('template');
+    template.innerHTML = String(html || '');
+    const converter = (no, pai = null) => {
+      if (no.nodeType === Node.TEXT_NODE) {
+        const exato = pai && preservarEspacos.has(pai.tagName);
+        return { tipo:'texto', valor: exato ? no.textContent.replace(/\r\n?/g, '\n')
+          : no.textContent.replace(/\s+/g, ' ') };
+      }
+      if (no.nodeType === Node.COMMENT_NODE) return { tipo:'comentario', valor:no.textContent };
+      if (no.nodeType !== Node.ELEMENT_NODE && no.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) return null;
+      const filhos = [...no.childNodes].flatMap((filho, indice, todos) => {
+        if (filho.nodeType === Node.TEXT_NODE && !filho.textContent.trim() &&
+            !preservarEspacos.has(no.tagName)) {
+          const anterior = todos.slice(0, indice).reverse().find(item => item.nodeType !== Node.TEXT_NODE || item.textContent.trim());
+          const seguinte = todos.slice(indice + 1).find(item => item.nodeType !== Node.TEXT_NODE || item.textContent.trim());
+          if ((!anterior || blocos.has(anterior.tagName)) && (!seguinte || blocos.has(seguinte.tagName))) return [];
+        }
+        const convertido = converter(filho, no);
+        return convertido ? [convertido] : [];
+      });
+      if (blocos.has(no.tagName)) {
+        if (filhos[0]?.tipo === 'texto') filhos[0].valor = filhos[0].valor.trimStart();
+        if (filhos.at(-1)?.tipo === 'texto') filhos.at(-1).valor = filhos.at(-1).valor.trimEnd();
+        if (filhos[0]?.tipo === 'texto' && !filhos[0].valor) filhos.shift();
+        if (filhos.at(-1)?.tipo === 'texto' && !filhos.at(-1).valor) filhos.pop();
+      }
+      if (no.nodeType === Node.DOCUMENT_FRAGMENT_NODE) return { tipo:'raiz', filhos };
+      // O Redactor acrescenta estes atributos somente ao DOM visual. A
+      // matéria 787704 confirma que eles não existem no HTML do formulário.
+      const atributosInternos = new Set(['data-rx-type', 'data-rx-first-level',
+        'data-rx-style-cache']);
+      const atributos = [...no.attributes].filter(atributo =>
+        !atributosInternos.has(atributo.name) &&
+        !(atributo.name === 'contenteditable' && no.hasAttribute('data-rx-type')) &&
+        !(atributo.name === 'class' && !atributo.value.trim())
+      ).map(atributo => {
+        let valor = atributo.value;
+        if (atributo.name === 'class') valor = valor.split(/\s+/).filter(Boolean).sort().join(' ');
+        if (atributo.name === 'style') valor = [...no.style].sort().map(nome =>
+          `${nome}:${no.style.getPropertyValue(nome).trim()}${no.style.getPropertyPriority(nome) ? '!important' : ''}`).join(';');
+        if (atributo.name === 'target') valor = valor.toLowerCase();
+        return [atributo.name, valor];
+      }).sort(([a], [b]) => a.localeCompare(b));
+      return { tipo:'elemento', tag:no.tagName.toLowerCase(), atributos, filhos };
+    };
+    return converter(template.content);
+  };
+  const a = modelo(primeiro), b = modelo(segundo);
+  const diferenca = (esquerda, direita, caminho = 'corpo') => {
+    if (esquerda.tipo !== direita.tipo || esquerda.tag !== direita.tag) return `${caminho}: elemento diferente`;
+    if (esquerda.valor !== direita.valor) return `${caminho}: texto ou comentário diferente`;
+    if (JSON.stringify(esquerda.atributos) !== JSON.stringify(direita.atributos)) return `${caminho}: atributos diferentes`;
+    if ((esquerda.filhos?.length || 0) !== (direita.filhos?.length || 0)) return `${caminho}: quantidade de elementos diferente`;
+    for (let i = 0; i < (esquerda.filhos?.length || 0); i++) {
+      const erro = diferenca(esquerda.filhos[i], direita.filhos[i], `${caminho}/${esquerda.filhos[i].tag || esquerda.filhos[i].tipo}[${i + 1}]`);
+      if (erro) return erro;
+    }
+    return '';
+  };
+  const motivo = diferenca(a, b);
+  return { equivalentes: !motivo, motivo };
+}
+
+async function conferirCorpos(aba, primeiro, segundo) {
+  return aba.evaluate(compararCorposAgenciaBrasil, { primeiro, segundo });
+}
+
 async function prepararImagensAgenciaBrasil(aba) {
   const editor = aba.locator('.rx-editor');
   const fonte = aba.locator('.rx-source');
@@ -89,24 +165,28 @@ async function prepararImagensAgenciaBrasil(aba) {
   }
   const original = await fonte.inputValue();
   const resultado = await aba.evaluate(analisarImagensAgenciaBrasil, original);
-  if (resultado.ambiguas.length || (previa?.removidas && !resultado.removidas)) {
+  if (resultado.ambiguas.length) {
     return { ok: false, removidas: 0, aviso: 'Identificação da imagem não é consistente no editor HTML; revisão manual necessária.' };
   }
   if (!resultado.removidas && !formulario?.removidas) {
     if (!fonteAberta) await alternar.click();
     return { ok: true, removidas: 0 };
   }
-  // O campo submetido pode conservar uma cópia antiga do HTML. Só sincronize
-  // quando sua versão sem logotipo for idêntica à fonte do editor.
-  if (formulario?.removidas && formulario.html.trim() !== resultado.html.trim()) {
-    return { ok: false, removidas: 0, aviso: 'Corpo visual e HTML do formulário divergem além do logotipo; revisão manual necessária.' };
+  // As três representações devem preservar o mesmo conteúdo após a remoção.
+  // O editor pode reordenar atributos e serializar entidades de outra forma.
+  for (const [nome, html] of [['visual', previa?.html], ['formulário', formulario?.html]]) {
+    if (html == null) continue;
+    const comparacao = await conferirCorpos(aba, html, resultado.html);
+    if (!comparacao.equivalentes) {
+      return { ok: false, removidas: 0, aviso: `Corpo ${nome} e fonte HTML divergem além do logotipo (${comparacao.motivo}); revisão manual necessária.` };
+    }
   }
   if (resultado.removidas) await fonte.fill(resultado.html);
   await alternar.click();
   await editor.waitFor({ state: 'visible' });
   let htmlEnviado = await campoTexto.inputValue();
   let persistido = await aba.evaluate(analisarImagensAgenciaBrasil, htmlEnviado);
-  if (persistido.removidas && persistido.html.trim() === resultado.html.trim()) {
+  if (persistido.removidas && (await conferirCorpos(aba, persistido.html, resultado.html)).equivalentes) {
     await campoTexto.evaluate((campo, html) => {
       campo.value = html;
       campo.dispatchEvent(new Event('input', { bubbles:true }));
@@ -116,9 +196,15 @@ async function prepararImagensAgenciaBrasil(aba) {
     persistido = await aba.evaluate(analisarImagensAgenciaBrasil, htmlEnviado);
   }
   const depois = await aba.evaluate(analisarImagensAgenciaBrasil, await editor.innerHTML());
+  const visualFinal = await conferirCorpos(aba, depois.html, resultado.html);
+  const formularioFinal = await conferirCorpos(aba, persistido.html, resultado.html);
   if (depois.removidas || depois.ambiguas.length || persistido.removidas || persistido.ambiguas.length ||
-      persistido.html.trim() !== resultado.html.trim()) {
-    return { ok: false, removidas: resultado.removidas, aviso: 'Logotipo ou divergência persiste no HTML enviado pelo formulário; revisão manual necessária.' };
+      !visualFinal.equivalentes || !formularioFinal.equivalentes) {
+    const etapa = depois.removidas || depois.ambiguas.length ? 'editor visual ainda contém o logotipo ou imagem ambígua'
+      : persistido.removidas || persistido.ambiguas.length ? 'campo HTML do formulário ainda contém o logotipo ou imagem ambígua'
+        : !visualFinal.equivalentes ? `editor visual divergente (${visualFinal.motivo})`
+          : `campo HTML do formulário divergente (${formularioFinal.motivo})`;
+    return { ok: false, removidas: resultado.removidas, aviso: `Após sincronização, ${etapa}; revisão manual necessária.` };
   }
   const corpoDoFormulario = await campoTexto.evaluate(campo => {
     const formulario = campo.closest('form');
@@ -126,10 +212,10 @@ async function prepararImagensAgenciaBrasil(aba) {
     const valores = new FormData(formulario).getAll(campo.name);
     return valores.length === 1 ? valores[0] : null;
   });
-  if (corpoDoFormulario !== resultado.html) {
+  if (corpoDoFormulario !== htmlEnviado) {
     return { ok: false, removidas: resultado.removidas, aviso: 'Não foi possível confirmar o HTML que o formulário enviará; revisão manual necessária.' };
   }
-  return { ok: true, removidas: resultado.removidas || formulario?.removidas || 0 };
+  return { ok: true, removidas: resultado.removidas || previa?.removidas || formulario?.removidas || 0 };
 }
 
 function extrairHtmlRequisicao(requisicao) {
@@ -156,4 +242,4 @@ function extrairHtmlRequisicao(requisicao) {
   return null;
 }
 
-module.exports = { analisarImagensAgenciaBrasil, prepararImagensAgenciaBrasil, extrairHtmlRequisicao };
+module.exports = { analisarImagensAgenciaBrasil, compararCorposAgenciaBrasil, prepararImagensAgenciaBrasil, extrairHtmlRequisicao };

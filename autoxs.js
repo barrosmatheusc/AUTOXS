@@ -24,6 +24,7 @@ const URL_NEWS = 'https://redacao.tribunaweb.com.br/news';
 // O CMS pode apresentar data e horário juntos: 24/09/202617:32.
 // A coleta e a conferência do lote devem aceitar o mesmo formato.
 const PADRAO_DATA = /\b(\d{2})\/(\d{2})\/(\d{4})(?:\s*(\d{2}):(\d{2}))?\b/;
+const categoriasCorrigidas = new WeakMap();
 
 // A data é apenas informativa; o limite da fila é a matéria de referência.
 function converterData(texto) {
@@ -161,16 +162,16 @@ async function lerConferenciaCategoria(aba, chapeu) {
 
 async function corrigirCategoriaGeral(aba) {
   const campo = aba.locator('#inp_category_id, select[name="category_id"]');
-  if (await campo.count() !== 1) return false;
+  if (await campo.count() !== 1) return { ok:false, motivo:'Controle de categoria ausente ou ambíguo.' };
   const opcao = await campo.evaluate(select => {
-    if (select.tagName !== 'SELECT' || select.name !== 'category_id' || !select.closest('form')) return null;
+    if (select.tagName !== 'SELECT' || select.name !== 'category_id' || !select.closest('form') || select.multiple) return null;
     const geral = [...select.options].filter(item => item.textContent.trim().normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '').toLowerCase() === 'geral' && !item.disabled);
     return geral.length === 1 && geral[0].value ? geral[0].value : null;
   });
-  if (!opcao) return false;
+  if (!opcao) return { ok:false, motivo:'Opção Geral única e ativa não encontrada no formulário.' };
   await campo.selectOption(opcao);
-  return await campo.evaluate((select, valor) => {
+  const confirmado = await campo.evaluate((select, valor) => {
     const formulario = select.closest('form');
     return select.value === valor && select.selectedOptions.length === 1 &&
       select.selectedOptions[0].textContent.trim().normalize('NFD')
@@ -178,6 +179,8 @@ async function corrigirCategoriaGeral(aba) {
       new FormData(formulario).getAll(select.name).length === 1 &&
       new FormData(formulario).get(select.name) === valor;
   }, opcao);
+  return confirmado ? { ok:true, valor:opcao } :
+    { ok:false, motivo:'O controle mudou visualmente, mas o valor category_id do formulário não confirmou Geral.' };
 }
 
 async function lerPendencias(aba) {
@@ -190,16 +193,18 @@ async function lerPendencias(aba) {
   let { categoria, conferenciaCategoria } = await lerConferenciaCategoria(aba, chapeu);
   if (conferenciaCategoria.categoriaDestino === 'Geral') {
     const assunto = conferenciaCategoria.assunto;
-    let corrigida = false;
+    let corrigida;
     try { corrigida = await corrigirCategoriaGeral(aba); }
-    catch { /* Categoria não confirmada: preservar a matéria para revisão. */ }
-    if (corrigida && (await lerCategoriaAtual(aba)).trim().toLowerCase() === 'geral') {
+    catch (erro) { corrigida = { ok:false, motivo:`Falha ao selecionar Geral: ${erro.message}` }; }
+    if (corrigida.ok && (await lerCategoriaAtual(aba)).trim().toLowerCase() === 'geral') {
+      categoriasCorrigidas.set(aba, { valor:corrigida.valor, assunto });
       categoria = 'Geral';
       conferenciaCategoria = { revisar:false,
         mensagem:`Categoria corrigida de Esportes para Geral (${assunto}); demais requisitos continuam obrigatórios.` };
+      console.log(`[AUTOXS][CATEGORIA] Esportes → Geral (${assunto}); valor category_id confirmado no formulário.`);
     } else {
       conferenciaCategoria = { revisar:true,
-        mensagem:`Categoria Esportes indica ${assunto}, mas a mudança para Geral não foi confirmada no formulário. Revisão manual necessária.` };
+        mensagem:`Categoria Esportes indica ${assunto}, mas a mudança para Geral não foi confirmada no formulário: ${corrigida.motivo || 'leitura final da categoria diferente de Geral'}. Revisão manual necessária.` };
     }
   }
   await mostrarConferenciaCategoria(aba, conferenciaCategoria);
@@ -238,6 +243,34 @@ async function validarChapeuEFotoAntesDoEnvio(aba, mostrarAviso = true) {
   return imagem.temImagem === true;
 }
 
+function extrairCategoriaRequisicao(requisicao) {
+  const tipo = String(requisicao.headers()['content-type'] || '').toLowerCase();
+  const corpo = requisicao.postData();
+  if (typeof corpo !== 'string') return null;
+  if (tipo.includes('application/x-www-form-urlencoded')) {
+    const valores = new URLSearchParams(corpo).getAll('category_id');
+    return valores.length === 1 ? valores[0] : null;
+  }
+  if (tipo.includes('application/json')) {
+    try {
+      const valor = JSON.parse(corpo).category_id;
+      return typeof valor === 'string' || typeof valor === 'number' ? String(valor) : null;
+    } catch { return null; }
+  }
+  if (tipo.includes('multipart/form-data')) {
+    const limite = /boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(requisicao.headers()['content-type'] || '')?.slice(1).find(Boolean);
+    if (!limite) return null;
+    const valores = [];
+    for (const parte of corpo.split(`--${limite}`)) {
+      const separador = parte.indexOf('\r\n\r\n');
+      if (separador < 0 || !/^content-disposition:[^\r\n]*\bname="category_id"/im.test(parte.slice(0, separador))) continue;
+      valores.push(parte.slice(separador + 4).replace(/\r\n$/, ''));
+    }
+    return valores.length === 1 ? valores[0] : null;
+  }
+  return null;
+}
+
 async function enviarMateria(aba, mostrarAviso = true, informarPendencia = () => {}) {
   // Usa o formulário do chapéu, evitando o Enviar do login ou de um modal.
   const campo = localizarCampoChapeu(aba);
@@ -258,6 +291,26 @@ async function enviarMateria(aba, mostrarAviso = true, informarPendencia = () =>
     informarPendencia(motivo);
     console.warn(`[AUTOXS] ${motivo}`);
     return false;
+  }
+  const categoriaCorrigida = categoriasCorrigidas.get(aba);
+  if (categoriaCorrigida) {
+    const seletorCategoria = aba.locator('#inp_category_id, select[name="category_id"]');
+    const formularioReal = await formulario.elementHandle();
+    const confirmada = await seletorCategoria.count() === 1 && await seletorCategoria.evaluate((select, { formulario, valor }) =>
+      select.tagName === 'SELECT' && select.name === 'category_id' &&
+      select.closest('form') === formulario && select.value === valor &&
+      select.selectedOptions.length === 1 &&
+      select.selectedOptions[0].textContent.trim().normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '').toLowerCase() === 'geral' &&
+      new FormData(formulario).getAll('category_id').length === 1 &&
+      new FormData(formulario).get('category_id') === valor,
+    { formulario:formularioReal, valor:categoriaCorrigida.valor });
+    if (!confirmada) {
+      const motivo = 'Categoria Geral deixou de corresponder ao valor category_id do formulário antes do envio; revisão manual necessária.';
+      console.warn(`[AUTOXS][CATEGORIA] ${motivo}`);
+      informarPendencia(motivo);
+      return false;
+    }
   }
   // Altera somente imagens de identificação inequívocas no corpo, após a
   // conferência independente de chapéu e imagem destacada.
@@ -306,18 +359,26 @@ async function enviarMateria(aba, mostrarAviso = true, informarPendencia = () =>
       const html = extrairHtmlRequisicao(requisicao);
       // O corpo esperado já foi analisado no editor/formulário. Conferir os
       // bytes da requisição evita consultar a Page durante uma navegação POST.
-      if (html !== null && html === corpoEsperado) {
+      const htmlCorreto = !limpeza.removidas || (html !== null && html === corpoEsperado);
+      const categoriaCorreta = !categoriaCorrigida || extrairCategoriaRequisicao(requisicao) === categoriaCorrigida.valor;
+      if (htmlCorreto && categoriaCorreta) {
+        if (limpeza.removidas) console.log('[AUTOXS][AGÊNCIA BRASIL] Requisição conferida: HTML do corpo sem o logotipo.');
+        if (categoriaCorrigida) console.log('[AUTOXS][CATEGORIA] Requisição conferida: category_id corresponde a Geral.');
         await rota.fallback();
         return;
       }
-      motivoRequisicao = 'Agência Brasil: logotipo ou HTML do corpo não verificável na requisição; revisão manual necessária.';
+      motivoRequisicao = !htmlCorreto
+        ? 'Agência Brasil: logotipo ou HTML do corpo não verificável na requisição; revisão manual necessária.'
+        : 'Categoria Geral não confirmada no campo category_id da requisição; revisão manual necessária.';
     } catch {
-      motivoRequisicao = 'Agência Brasil: falha ao verificar o HTML da requisição; revisão manual necessária.';
+      motivoRequisicao = categoriaCorrigida && !limpeza.removidas
+        ? 'Categoria Geral: falha ao verificar category_id na requisição; revisão manual necessária.'
+        : 'Agência Brasil: falha ao verificar o HTML da requisição; revisão manual necessária.';
     }
     await rota.abort('blockedbyclient');
     avisarBloqueio(null);
   };
-  if (limpeza.removidas) await aba.route('**/*', conferirRequisicao);
+  if (limpeza.removidas || categoriaCorrigida) await aba.route('**/*', conferirRequisicao);
   const respostaPendente = aba.waitForResponse(resposta => {
     const requisicao = resposta.request();
     const destino = new URL(resposta.url());
@@ -328,9 +389,9 @@ async function enviarMateria(aba, mostrarAviso = true, informarPendencia = () =>
   let resposta;
   try {
     await enviar.click();
-    resposta = limpeza.removidas ? await Promise.race([respostaPendente, bloqueio]) : await respostaPendente;
+    resposta = limpeza.removidas || categoriaCorrigida ? await Promise.race([respostaPendente, bloqueio]) : await respostaPendente;
   } finally {
-    if (limpeza.removidas) await aba.unroute('**/*', conferirRequisicao);
+    if (limpeza.removidas || categoriaCorrigida) await aba.unroute('**/*', conferirRequisicao);
   }
   if (motivoRequisicao) {
     console.warn(`[AUTOXS] ${motivoRequisicao}`);

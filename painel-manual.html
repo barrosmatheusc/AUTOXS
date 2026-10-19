@@ -8,7 +8,7 @@
 :root { color-scheme: dark; font-family: "Segoe UI", Arial, sans-serif; background: #101817; color: #edf5f1; }
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100vh; padding: 32px 20px; background: radial-gradient(ellipse at 20% 0%, #23483a 0%, transparent 55%), #101817; }
-.central { width: min(100%, 1600px); margin: 0 auto; display: grid; grid-template-columns: minmax(320px, var(--largura-automacao, 440px)) 12px minmax(0, 1fr); align-items: start; gap: 6px; }
+.central { width: 100%; margin: 0 auto; display: grid; grid-template-columns: minmax(320px, var(--largura-automacao, 440px)) 12px minmax(0, 1fr); align-items: start; gap: 6px; }
 .central:has(.coluna-producao[hidden]) { grid-template-columns: minmax(0, 660px); justify-content: center; }
 .central:has(.coluna-producao[hidden]) .divisor-paineis { display: none; }
 .coluna-automacao, .coluna-producao { min-width: 0; }
@@ -42,7 +42,7 @@ button:disabled { background: #608871; color: #e9f2ed; cursor: wait; }
 .stat strong { display: block; font-size: 29px; font-weight: 600; margin-bottom: 5px; }
 .stat span { color: #bbcbc3; font-size: 13px; }
 footer { color: #91a79b; font-size: 13px; line-height: 1.65; padding: 22px 12px 0; text-align: center; }
-@media(max-width: 980px) { .central { grid-template-columns: minmax(0, 1fr); max-width: 720px; } .divisor-paineis { display: none; } }
+@media(max-width: 980px) { .central { grid-template-columns: minmax(0, 1fr); } .divisor-paineis { display: none; } }
 @media(max-width: 480px) { .card { padding: 28px 22px; } }
 </style>
 </head>
@@ -56,6 +56,7 @@ footer { color: #91a79b; font-size: 13px; line-height: 1.65; padding: 22px 12px 
     <button id="atualizar" type="button" aria-haspopup="dialog">Atualizar</button>
     <button id="adicionar" class="adicionar" type="button">Adicionar matérias</button>
     <button id="compartilhar" class="compartilhar" type="button">Links de matérias</button>
+    <button id="gerador-artes" class="compartilhar" type="button">Gerador de Artes</button>
     <div aria-live="polite" role="status"><p id="status">A conferência começa quando você clicar.</p><p id="materia"></p><p id="motivo-pendencia" hidden></p></div>
     <div class="summary" id="resumo" hidden>
       <div class="stat"><strong id="enviadas">0</strong><span>matérias enviadas</span></div>
@@ -78,6 +79,17 @@ footer { color: #91a79b; font-size: 13px; line-height: 1.65; padding: 22px 12px 
 const botao = document.querySelector('#atualizar');
 const botaoAdicao = document.querySelector('#adicionar');
 const botaoCompartilhar = document.querySelector('#compartilhar');
+const botaoGeradorArtes = document.querySelector('#gerador-artes');
+botaoGeradorArtes.addEventListener('click', async () => {
+  if (botaoGeradorArtes.disabled) return;
+  botaoGeradorArtes.disabled = true;
+  try {
+    const resposta = await window.abrirGeradorArtes();
+    if (!resposta.ok) throw new Error(resposta.mensagem);
+  } catch (erro) {
+    document.querySelector('#status').textContent = erro.message || 'Não foi possível abrir o Gerador de Artes.';
+  } finally { botaoGeradorArtes.disabled = false; }
+});
 window.addEventListener('message', evento => {
   const quadro = document.querySelector('.coluna-producao iframe');
   if (evento.source !== quadro.contentWindow || evento.data?.tipo !== 'autoxs-producao-altura') return;

@@ -1,4 +1,5 @@
 const path = require('node:path');
+const fs = require('node:fs/promises');
 const { pathToFileURL } = require('node:url');
 const { criarGrupoJanelas } = require('./janelas-trabalho');
 const { identificarMateriaComGemini } = require('./identificar-materia-gemini');
@@ -9,11 +10,14 @@ async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao 
   const painel = context.pages().find(p => p.url() === 'about:blank') || await context.newPage();
   const url = pathToFileURL(path.join(__dirname, 'painel-manual.html')).href;
   const urlAdicao = pathToFileURL(path.join(__dirname, 'adicionar-painel.html')).href;
+  const urlGerador = pathToFileURL(path.join(__dirname, 'gerador-artes.html')).href;
   const compartilhamento = compartilhamentoExterno || criarCompartilhamento(context, criarGrupoJanelas(context));
   const producao = historico ? criarPainelProducao(context, historico, compartilhamento, buscadorLinks) : null;
   let emAndamento = false;
   let adicao = null;
   let abrindoAdicao = null;
+  let geradorArtes = null;
+  let abrindoGerador = null;
   let filaAdicao = Promise.resolve();
   const enfileirarAdicao = tarefa => {
     const resultado = filaAdicao.then(tarefa);
@@ -120,6 +124,32 @@ async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao 
       await compartilhamento.abrir();
       return {ok:true};
     } catch (erro) { return {ok:false,mensagem:erro.message || 'Não foi possível abrir as matérias para compartilhamento.'}; }
+  });
+  await painel.exposeBinding('abrirGeradorArtes', async ({ frame }) => {
+    if (frame !== painel.mainFrame() || frame.url() !== url) return {ok:false,mensagem:'Abra o painel inicial.'};
+    try {
+      if (!abrindoGerador) abrindoGerador = (async () => {
+        if (geradorArtes && !geradorArtes.isClosed()) {
+          await geradorArtes.bringToFront();
+          return;
+        }
+        const logoSvg = await fs.readFile(path.join(__dirname, 'gerador-artes', 'assets', 'logo-tribuna-sertao.svg'));
+        const pagina = await context.newPage();
+        try {
+          await pagina.goto(urlGerador);
+          const carregado = await pagina.evaluate(dataUrl => window.configurarLogoGerador(dataUrl),
+            `data:image/svg+xml;base64,${logoSvg.toString('base64')}`);
+          if (!carregado) throw new Error('Não foi possível carregar o logotipo oficial da Tribuna do Sertão.');
+          geradorArtes = pagina;
+          await pagina.bringToFront();
+        } catch (erro) {
+          await pagina.close().catch(() => {});
+          throw erro;
+        }
+      })().finally(() => { abrindoGerador = null; });
+      await abrindoGerador;
+      return {ok:true};
+    } catch (erro) { return {ok:false,mensagem:erro.message || 'Não foi possível abrir o Gerador de Artes.'}; }
   });
   if (producao) await producao.integrar(painel);
   await painel.goto(url);

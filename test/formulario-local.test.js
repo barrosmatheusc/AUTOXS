@@ -17,7 +17,7 @@ async function paginaLocal({ rotulo = 'Chapéu (opcional)', nome = 'campo', valo
     ${rotulo ? `<label for="${nome}">${rotulo}</label>` : ''}
     <input id="${nome}" name="${nome}" value="${valor}">
     ${categoria ? `<input id="inp_title" name="title" value="${titulo}"><input id="inp_subtitle" name="subtitle" value="${subtitulo}">
-    <select id="inp_category_id" name="category_id"><option value="7">${categoria}</option>${geral ? '<option value="1">Geral</option>' : ''}</select>` : ''}
+    <select id="inp_category_id" name="category_id"><option value="2">${categoria}</option>${geral ? '<option value="1">Geral</option>' : ''}</select>` : ''}
     <div><button type="button">+</button></div>
     ${foto ? `<div><img width="200" height="120" src="data:image/svg+xml,${svg}"></div>` : ''}
     <div><button type="button">+</button></div>
@@ -87,6 +87,39 @@ test('POST local envia o corpo sem o figure do logotipo e preserva o texto', asy
   } finally { await mock.context.close(); }
 });
 
+test('simulação Fluminense x Santos com HTML descrito: serializações equivalentes preservam a reportagem e removem só o logo', async () => {
+  const logo = '<figure style="text-align: center;"><a href="https://agenciabrasil.ebc.com.br/" target="_BLANK"><img alt="Logo Agência Brasil" src="https://cdn.jsdelivr.net/gh/sergiosdlima/assets-ebc@1.0.0/abr/assets/images/logo-agenciabrasil.svg" style="height: 54px;"></a></figure>';
+  const foto = '<figure><img src="/fotos/fluminense-santos.jpg" alt="Jogadores durante a partida"><figcaption>Foto do jogo</figcaption></figure>';
+  const visual = `<p class="noticia" style="text-align: left"><strong>Rádio Nacional</strong> transmite duelo Fluminense x Santos.</p>${logo}${foto}<p>Leia a <a href="https://exemplo.test/tabela">tabela do campeonato</a>.</p>`;
+  const formulario = `<p style="text-align:left" class="noticia"><strong>Rádio Nacional</strong> transmite duelo Fluminense x Santos.</p>\n${logo}${foto}<p>Leia a <a href="https://exemplo.test/tabela">tabela do campeonato</a>.</p>`;
+  const mock = await paginaLocal({ categoria:'Esportes', titulo:'Rádio Nacional transmite duelo Fluminense x Santos no Brasileirão', corpoHtml:visual });
+  try {
+    await mock.page.locator('#inp_text').evaluate((campo, html) => { campo.value = html; }, formulario);
+    assert.equal((await lerPendencias(mock.page)).categoria, 'Esportes');
+    assert.equal(await enviarMateria(mock.page, false), true);
+    const enviado = new URLSearchParams(mock.ultimoPost()).get('text');
+    assert.doesNotMatch(enviado, /logo-agenciabrasil\.svg/);
+    assert.match(enviado, /fluminense-santos\.jpg/);
+    assert.match(enviado, /Foto do jogo/);
+    assert.match(enviado, /href="https:\/\/exemplo\.test\/tabela"/);
+    assert.equal(new URLSearchParams(mock.ultimoPost()).get('category_id'), '2');
+  } finally { await mock.context.close(); }
+});
+
+test('payload com categoria antiga é bloqueado antes de chegar ao servidor local', async () => {
+  const mock = await paginaLocal({ categoria:'Esportes', titulo:'Observatório registra descoberta de novo planeta' });
+  try {
+    assert.equal((await lerPendencias(mock.page)).categoria, 'Geral');
+    await mock.page.locator('form').evaluate(form => form.addEventListener('submit', () => {
+      form.querySelector('[name="category_id"]').value = '2';
+    }));
+    let motivo = '';
+    assert.equal(await enviarMateria(mock.page, false, aviso => { motivo = aviso; }), false);
+    assert.equal(mock.envios(), 0);
+    assert.match(motivo, /category_id/);
+  } finally { await mock.context.close(); }
+});
+
 test('categoria ambígua ou Geral ausente mantém matéria para revisão', async () => {
   for (const opcoes of [
     { categoria:'Esportes', titulo:'Programação é anunciada', subtitulo:'Festival de teatro e torneio de atletas' },
@@ -96,7 +129,7 @@ test('categoria ambígua ou Geral ausente mantém matéria para revisão', async
     try {
       const estado = await lerPendencias(mock.page);
       assert.equal(estado.conferenciaCategoria.revisar, true);
-      assert.equal(await mock.page.locator('#inp_category_id').inputValue(), '7');
+      assert.equal(await mock.page.locator('#inp_category_id').inputValue(), '2');
       assert.equal(await enviarMateria(mock.page, false), false);
       assert.equal(mock.envios(), 0);
     } finally { await mock.context.close(); }
@@ -108,7 +141,7 @@ test('esporte legítimo fica em Esportes; chapéu ou foto ausente impedem o envi
   try {
     assert.equal((await lerPendencias(esporte.page)).categoria, 'Esportes');
     assert.equal(await enviarMateria(esporte.page, false), true);
-    assert.equal(new URLSearchParams(esporte.ultimoPost()).get('category_id'), '7');
+    assert.equal(new URLSearchParams(esporte.ultimoPost()).get('category_id'), '2');
   } finally { await esporte.context.close(); }
   for (const opcoes of [{ valor:'' }, { foto:false }]) {
     const mock = await paginaLocal({ ...opcoes, categoria:'Esportes', titulo:'Observatório registra descoberta de novo planeta' });
