@@ -5,7 +5,7 @@ const { criarSessaoAtualizacaoDiscreta } = require('./sessao-atualizacao-discret
 const { criarGrupoJanelas } = require('./janelas-trabalho');
 const { confirmarSalvamento, acompanharEnvioManual } = require('./acompanhar-envio');
 const { conferirCategoriaEsportes, mostrarConferenciaCategoria, ehCategoriaEsportiva } = require('./conferir-esportes');
-const { selecionarPaginaListagem, avancarPaginaListagem, aguardarTabelaListagem } = require('./pagina-listagem');
+const { selecionarPaginaListagem } = require('./pagina-listagem');
 const { criarEnvioAoSite } = require('./preencher-materia');
 const { criarHistoricoProducao } = require('./historico-producao');
 const { criarCompartilhamento } = require('./compartilhar-materias');
@@ -19,13 +19,12 @@ const { prepararImagensAgenciaBrasil, analisarImagensAgenciaBrasil, extrairHtmlR
 const { lerCategoriaAtual, podeGerarImagemRJ, gerarImagemRJ, gerarImagemPorSolicitacao, imagemEmGeracao } = require('./imagem-rj');
 
 const TITULO_LIMITE = 'Quanto foi o jogo Brasil x Japão hoje? Veja resultado dos gols';
-const MAX_ABAS_ATUALIZACAO = 3;
+const LIMITE_PAGINA = 25;
 const URL_NEWS = 'https://redacao.tribunaweb.com.br/news';
 // O CMS pode apresentar data e horário juntos: 24/09/202617:32.
 // A coleta e a conferência do lote devem aceitar o mesmo formato.
 const PADRAO_DATA = /\b(\d{2})\/(\d{2})\/(\d{4})(?:\s*(\d{2}):(\d{2}))?\b/;
 const categoriasCorrigidas = new WeakMap();
-const logosRemovidos = new WeakSet();
 
 // A data é apenas informativa; o limite da fila é a matéria de referência.
 function converterData(texto) {
@@ -41,18 +40,15 @@ function converterData(texto) {
 function ehMateriaLimite(titulo) {
   const simplificar = valor => normalizar(valor).replace(/×/g, 'x')
     .replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-  return simplificar(titulo) === simplificar(TITULO_LIMITE);
+  return simplificar(titulo).includes(simplificar(TITULO_LIMITE));
 }
 
 async function coletarMaterias(page, estado = {}) {
-  // A referência e tudo abaixo dela ficam fora da fila, inclusive quando não
-  // têm link de edição. O número de linhas da página nunca limita a busca.
+  // O lote é somente a página atualmente filtrada. A referência e tudo
+  // abaixo dela ficam fora da fila, inclusive quando não têm link de edição.
   estado.limiteEncontrado = false;
-  estado.registros = 0;
-  estado.ignoradas = [];
-  estado.ultimaMateria = '';
   let linhas;
-  for (const seletor of ['table tbody tr', 'tr', '[role="row"]', '.list-group-item', '.card', '.row']) {
+  for (const seletor of ['tr', '[role="row"]', '.list-group-item', '.card', '.row']) {
     const candidatos = page.locator(seletor);
     if (await candidatos.count() > 0) {
       linhas = candidatos;
@@ -65,121 +61,31 @@ async function coletarMaterias(page, estado = {}) {
   const quantidade = await linhas.count();
   for (let i = 0; i < quantidade; i++) {
     const linha = linhas.nth(i);
-    if (!await linha.isVisible()) { estado.ignoradas.push({ linha:i + 1, motivo:'linha oculta' }); continue; }
+    if (!await linha.isVisible()) continue;
     const texto = await linha.innerText();
     const celulas = linha.locator('td');
-    const quantidadeCelulas = await celulas.count();
-    if (!quantidadeCelulas) continue; // Cabeçalho da tabela, não é registro.
-    estado.registros++;
-    const titulo = quantidadeCelulas > 7
+    const titulo = await celulas.count() > 7
       ? (await celulas.nth(7).innerText()).trim()
       : texto.replace(/\s+/g, ' ').trim();
-    estado.ultimaMateria = titulo || texto.replace(/\s+/g, ' ').trim();
     if (ehMateriaLimite(titulo)) {
       estado.limiteEncontrado = true;
       break;
     }
-    if (!titulo) { estado.ignoradas.push({ linha:i + 1, motivo:'título ausente' }); continue; }
+    if (materias.length >= LIMITE_PAGINA) continue;
     const links = linha.locator('a');
     const enderecos = await links.evaluateAll(elementos => elementos
       .filter(a => /editar/i.test(`${a.textContent} ${a.title} ${a.getAttribute('aria-label') || ''}`) || /edit/i.test(a.getAttribute('href') || ''))
       .map(a => a.getAttribute('href')).filter(Boolean));
-    const urls = [];
-    let linkMalformado = false;
-    for (const href of enderecos) {
-      try { urls.push(new URL(href, page.url()).href); }
-      catch { linkMalformado = true; }
-    }
-    const unicas = [...new Set(urls)];
-    if (linkMalformado || unicas.length !== 1) {
-      estado.ignoradas.push({ linha:i + 1, titulo, motivo:linkMalformado ? 'link de edição malformado' :
-        unicas.length ? 'links de edição ambíguos' : 'link de edição ausente' });
-      continue;
-    }
-    const url = unicas[0];
+    const urls = [...new Set(enderecos.map(href => new URL(href, page.url()).href))];
+    if (urls.length !== 1) continue;
+    const url = urls[0];
     const destino = new URL(url);
-    if (destino.origin !== new URL(URL_NEWS).origin ||
-        !/^\/news\/(?:edit\/\d+|\d+\/edit)\/?$/.test(destino.pathname)) {
-      estado.ignoradas.push({ linha:i + 1, titulo, motivo:'endereço de edição inválido' });
-      continue;
-    }
-    if (vistas.has(url)) { estado.ignoradas.push({ linha:i + 1, titulo, motivo:'registro duplicado na página' }); continue; }
+    if (destino.origin !== new URL(URL_NEWS).origin || !destino.pathname.startsWith('/news/') || vistas.has(url)) continue;
     const dataTexto = texto.match(PADRAO_DATA)?.[0];
     vistas.add(url);
     materias.push({ url, data: dataTexto, titulo });
   }
-  estado.elegiveis = materias.length;
   return materias;
-}
-
-async function percorrerFilaAteReferencia({ paginaInicial = 1, lerPagina, avancar, progresso = async () => {}, ativo = () => true }) {
-  const resultado = { materias:[], paginas:0, registros:0, elegiveis:0, ignoradas:0,
-    duplicadas:0, ultimaMateria:'', limiteEncontrado:false, interrompido:false, erroBusca:'' };
-  const vistas = new Set();
-  let numero = paginaInicial;
-  while (ativo()) {
-    let leitura;
-    try { leitura = await lerPagina(numero); }
-    catch (erro) { resultado.erroBusca = `Página ${numero}: ${erro.message}`; break; }
-    const { materias, estado } = leitura;
-    resultado.paginas++;
-    resultado.registros += estado.registros;
-    resultado.ultimaMateria = estado.ultimaMateria || resultado.ultimaMateria;
-    await progresso(`[BUSCA] Página ${numero}: ${estado.registros} registros identificados.`);
-    for (const ignorada of estado.ignoradas) {
-      resultado.ignoradas++;
-      await progresso(`[FILTROS] Página ${numero}, linha ${ignorada.linha}${ignorada.titulo ? ` — ${ignorada.titulo}` : ''}: ${ignorada.motivo}.`);
-    }
-    for (const materia of materias) {
-      if (vistas.has(materia.url)) {
-        resultado.duplicadas++;
-        await progresso(`[FILTROS] ${materia.titulo}: registro duplicado entre páginas.`);
-        continue;
-      }
-      vistas.add(materia.url);
-      resultado.materias.push(materia);
-      resultado.elegiveis++;
-    }
-    await progresso(`[BUSCA] Total acumulado: ${resultado.registros} registros; ${resultado.elegiveis} elegíveis; ${resultado.ignoradas + resultado.duplicadas} ignorados.`);
-    if (estado.limiteEncontrado) { resultado.limiteEncontrado = true; break; }
-    if (!ativo()) break;
-    try { if (!await avancar(numero)) break; }
-    catch (erro) { resultado.erroBusca = `Após a página ${numero}: ${erro.message}`; break; }
-    numero++;
-  }
-  resultado.interrompido = !ativo();
-  if (!resultado.limiteEncontrado) await progresso(`[LIMITE] Referência Brasil x Japão não encontrada. ${resultado.paginas} página(s) verificadas; última matéria: ${resultado.ultimaMateria || 'nenhuma'}.${resultado.erroBusca ? ` Erro: ${resultado.erroBusca}` : ''}`);
-  return resultado;
-}
-
-async function processarFilaEmGrupos(materias, operacoes, aguardarVagas, progresso = async () => {}) {
-  const total = { abertas:0, enviadas:0, pendentes:0, erros:0 };
-  let processadas = 0;
-  for (let inicio = 0; inicio < materias.length;) {
-    if (operacoes.ativo?.() === false) { total.interrompido = true; break; }
-    const vagas = await aguardarVagas();
-    if (!vagas || operacoes.ativo?.() === false) { total.interrompido = true; break; }
-    const grupo = materias.slice(inicio, inicio + Math.min(MAX_ABAS_ATUALIZACAO, vagas))
-      .map((materia, indice) => ({ ...materia, numeroExecucao:inicio + indice + 1 }));
-    await progresso(`[ABAS] Até ${grupo.length} matéria(s) em processamento; ${materias.length - inicio - grupo.length} aguardando vaga.`);
-    const parcial = await processarLote(grupo, { ...operacoes,
-      registrarProcessada:materia => { processadas++; operacoes.registrarProcessada?.(materia); } });
-    for (const chave of ['abertas', 'enviadas', 'pendentes', 'erros']) total[chave] += parcial[chave];
-    inicio += grupo.length;
-    if (parcial.interrompido) { total.interrompido = true; break; }
-  }
-  total.processadas = processadas;
-  return total;
-}
-
-async function aguardarVagasAtualizacao({ listarAbertas, ativo, progresso = async () => {}, esperar = () => new Promise(resolve => setTimeout(resolve, 1000)) }) {
-  while (ativo()) {
-    const abertas = listarAbertas();
-    if (abertas < MAX_ABAS_ATUALIZACAO) return MAX_ABAS_ATUALIZACAO - abertas;
-    await progresso(`[CONTINUIDADE] ${abertas} abas aguardam revisão. Conclua ou feche uma para continuar a fila.`);
-    await esperar();
-  }
-  return 0;
 }
 
 async function abrirPesquisaImagem(aba, titulo = '', opcoes = {}) {
@@ -423,11 +329,9 @@ async function enviarMateria(aba, mostrarAviso = true, informarPendencia = () =>
     informarPendencia(motivo);
     return false;
   }
-  if (limpeza.removidas) logosRemovidos.add(aba);
-  const conferirLogoNaRequisicao = Boolean(limpeza.removidas || logosRemovidos.has(aba));
-  if (limpeza.removidas) console.log(`[AGÊNCIA BRASIL] ${limpeza.removidas} logotipo(s) removido(s); editor e formulário conferidos.`);
-  const corpoEsperado = conferirLogoNaRequisicao ? await aba.locator('#inp_text, textarea[name="text"]').inputValue() : null;
-  if (conferirLogoNaRequisicao) {
+  if (limpeza.removidas) console.log(`[AUTOXS] Agência Brasil: ${limpeza.removidas} imagem(ns) de identificação removida(s) do corpo.`);
+  const corpoEsperado = limpeza.removidas ? await aba.locator('#inp_text, textarea[name="text"]').inputValue() : null;
+  if (limpeza.removidas) {
     const conferenciaCorpo = await aba.evaluate(analisarImagensAgenciaBrasil, corpoEsperado);
     if (conferenciaCorpo.removidas || conferenciaCorpo.ambiguas.length) {
       const motivo = 'Agência Brasil: logotipo voltou ao campo enviado; revisão manual necessária.';
@@ -455,10 +359,10 @@ async function enviarMateria(aba, mostrarAviso = true, informarPendencia = () =>
       const html = extrairHtmlRequisicao(requisicao);
       // O corpo esperado já foi analisado no editor/formulário. Conferir os
       // bytes da requisição evita consultar a Page durante uma navegação POST.
-      const htmlCorreto = !conferirLogoNaRequisicao || (html !== null && html === corpoEsperado);
+      const htmlCorreto = !limpeza.removidas || (html !== null && html === corpoEsperado);
       const categoriaCorreta = !categoriaCorrigida || extrairCategoriaRequisicao(requisicao) === categoriaCorrigida.valor;
       if (htmlCorreto && categoriaCorreta) {
-        if (conferirLogoNaRequisicao) console.log('[AGÊNCIA BRASIL] Requisição conferida: HTML do corpo sem o logotipo.');
+        if (limpeza.removidas) console.log('[AUTOXS][AGÊNCIA BRASIL] Requisição conferida: HTML do corpo sem o logotipo.');
         if (categoriaCorrigida) console.log('[AUTOXS][CATEGORIA] Requisição conferida: category_id corresponde a Geral.');
         await rota.fallback();
         return;
@@ -467,14 +371,14 @@ async function enviarMateria(aba, mostrarAviso = true, informarPendencia = () =>
         ? 'Agência Brasil: logotipo ou HTML do corpo não verificável na requisição; revisão manual necessária.'
         : 'Categoria Geral não confirmada no campo category_id da requisição; revisão manual necessária.';
     } catch {
-      motivoRequisicao = categoriaCorrigida && !conferirLogoNaRequisicao
+      motivoRequisicao = categoriaCorrigida && !limpeza.removidas
         ? 'Categoria Geral: falha ao verificar category_id na requisição; revisão manual necessária.'
         : 'Agência Brasil: falha ao verificar o HTML da requisição; revisão manual necessária.';
     }
     await rota.abort('blockedbyclient');
     avisarBloqueio(null);
   };
-  if (conferirLogoNaRequisicao || categoriaCorrigida) await aba.route('**/*', conferirRequisicao);
+  if (limpeza.removidas || categoriaCorrigida) await aba.route('**/*', conferirRequisicao);
   const respostaPendente = aba.waitForResponse(resposta => {
     const requisicao = resposta.request();
     const destino = new URL(resposta.url());
@@ -485,9 +389,9 @@ async function enviarMateria(aba, mostrarAviso = true, informarPendencia = () =>
   let resposta;
   try {
     await enviar.click();
-    resposta = conferirLogoNaRequisicao || categoriaCorrigida ? await Promise.race([respostaPendente, bloqueio]) : await respostaPendente;
+    resposta = limpeza.removidas || categoriaCorrigida ? await Promise.race([respostaPendente, bloqueio]) : await respostaPendente;
   } finally {
-    if (conferirLogoNaRequisicao || categoriaCorrigida) await aba.unroute('**/*', conferirRequisicao);
+    if (limpeza.removidas || categoriaCorrigida) await aba.unroute('**/*', conferirRequisicao);
   }
   if (motivoRequisicao) {
     console.warn(`[AUTOXS] ${motivoRequisicao}`);
@@ -502,22 +406,10 @@ async function enviarMateria(aba, mostrarAviso = true, informarPendencia = () =>
 async function processarLote(materias, operacoes) {
   const abertas = [];
   const geracoesPendentes = [];
-  const problemasRegistrados = new Map();
   const resumo = { abertas: 0, enviadas: 0, pendentes: 0, erros: 0 };
   const tituloCurto = materia => {
     const texto = String(materia.titulo || 'Sem título').replace(/\s+/g, ' ').trim();
     return texto.length > 70 ? `${texto.slice(0, 67)}...` : texto;
-  };
-  const problema = async (materia, codigo, descricao, situacao = 'Revisão necessária', indice = materias.indexOf(materia)) => {
-    if (!problemasRegistrados.has(materia.url)) problemasRegistrados.set(materia.url, new Set());
-    problemasRegistrados.get(materia.url).add(codigo);
-    await operacoes.registrarProblema?.({ materia, numero:materia.numeroExecucao || indice + 1,
-      codigo, descricao, situacao });
-  };
-  const corrigido = async (materia, codigo) => {
-    const registrados = problemasRegistrados.get(materia.url);
-    if (!registrados?.size || (codigo && !registrados.has(codigo))) return;
-    await operacoes.registrarProblema?.({ materia, codigo, situacao:'Corrigido' });
   };
   const interrompido = () => {
     if (operacoes.ativo?.() !== false) return false;
@@ -528,10 +420,7 @@ async function processarLote(materias, operacoes) {
   async function acompanharPendente(aba, materia) {
     if (!operacoes.acompanhar || aba.isClosed?.() || interrompido()) return;
     try { await operacoes.acompanhar(aba, materia); }
-    catch (erro) {
-      await operacoes.log('  Fechamento automático indisponível nesta aba. Você pode enviá-la e fechá-la manualmente.');
-      await problema(materia, 'acompanhar-envio', `Não foi possível acompanhar o envio manual: ${erro.message || 'erro não identificado'}.`, 'Erro técnico');
-    }
+    catch { await operacoes.log('  Fechamento automático indisponível nesta aba. Você pode enviá-la e fechá-la manualmente.'); }
   }
   async function retomarGeracoesProntas() {
     for (const tarefa of geracoesPendentes) {
@@ -552,78 +441,57 @@ async function processarLote(materias, operacoes) {
           throw new Error('A aba da matéria não está mais disponível.');
         }
         if (operacoes.preparar) await operacoes.preparar(aba);
-        if (operacoes.limparLogo) {
-          const logo = await operacoes.limparLogo(aba);
-          if (!logo.ok) {
-            await operacoes.log('Agência Brasil: ' + logo.aviso);
-            await problema(materia, 'agencia-brasil', 'Agência Brasil: ' + logo.aviso, 'Revisão necessária', tarefa.indice);
-            continue;
-          }
-          await corrigido(materia, 'agencia-brasil');
-        }
         etapa = 'conferir novamente chapéu e foto';
         const estado = await operacoes.ler(aba);
-        if (estado.temChapeu === true) await corrigido(materia, 'chapeu');
         if (estado.conferenciaCategoria?.revisar) {
           await operacoes.log('  ' + estado.conferenciaCategoria.mensagem);
-          await problema(materia, 'categoria', estado.conferenciaCategoria.mensagem, 'Revisão necessária', tarefa.indice);
           continue;
         }
-        await corrigido(materia, 'categoria');
         if (estado.temChapeu !== true || estado.temImagem !== true) {
           await operacoes.log(estado.temChapeu !== true ? '  Falta chapéu. Aba mantida para preenchimento manual.' : '  Foto não confirmada. Confira a aba manualmente.');
-          if (estado.temChapeu !== true) await problema(materia, 'chapeu', 'Chapéu não confirmado; preencha e revise a matéria.', 'Revisão necessária', tarefa.indice);
           continue;
         }
         if (interrompido()) return;
         etapa = 'enviar a matéria após a geração';
         if (!await operacoes.enviar(aba)) {
-          const motivo = operacoes.motivoPendencia?.(aba) || 'Envio não confirmado. Confira a matéria na aba aberta.';
-          await operacoes.log('  ' + motivo);
-          await problema(materia, 'envio', motivo, 'Revisão necessária', tarefa.indice);
+          await operacoes.log('  ' + (operacoes.motivoPendencia?.(aba) || 'Envio não confirmado. Confira a matéria na aba aberta.'));
           continue;
         }
         resumo.enviadas++;
         resumo.pendentes--;
-        await corrigido(materia);
         // Um erro ao fechar a aba não transforma um envio confirmado em pendência.
         try { await aba.close(); }
         catch {
           resumo.erros++;
           await operacoes.log('  Matéria enviada. Não foi possível fechar a aba.');
-          await problema(materia, 'fechar-aba', 'Matéria enviada, mas não foi possível fechar a aba.', 'Erro técnico', tarefa.indice);
           continue;
         }
         await operacoes.log('  Foto e legenda conferidas. Matéria enviada. Aba fechada.');
-      } catch (erro) {
+      } catch {
         if (interrompido()) return;
         resumo.erros++;
         await operacoes.log(`  Não foi possível ${etapa}. Aba mantida para conferência manual.`);
-        await problema(materia, `erro-${etapa}`, `Não foi possível ${etapa}: ${erro.message || 'erro não identificado'}.`, 'Erro técnico', tarefa.indice);
       } finally {
         await acompanharPendente(aba, materia);
       }
     }
   }
-  // O controlador entrega grupos de até três matérias. Dentro do grupo,
-  // as abas são abertas antes da verificação editorial já existente.
-  for (const [indice, materia] of materias.entries()) {
+  // Duas etapas: todas as abas são abertas antes de qualquer verificação/envio.
+  for (const materia of materias.slice(0, LIMITE_PAGINA)) {
     if (interrompido()) break;
     if (ehMateriaLimite(materia.titulo)) break;
     try {
       const aba = await operacoes.abrir(materia);
       abertas.push({ materia, aba });
       resumo.abertas++;
-    } catch (erro) {
+    } catch {
       if (interrompido()) break;
       resumo.erros++;
       await operacoes.log(`Não foi possível abrir: ${tituloCurto(materia)}.`);
-      await problema(materia, 'abrir', `Não foi possível abrir a matéria: ${erro.message || 'erro não identificado'}.`, 'Erro técnico', indice);
     }
   }
   for (const [indice, { materia, aba }] of abertas.entries()) {
     if (interrompido()) break;
-    operacoes.registrarProcessada?.(materia);
     // Retoma apenas entre matérias, sem disputar o foco com a conferência atual.
     await retomarGeracoesProntas();
     if (interrompido()) break;
@@ -631,38 +499,21 @@ async function processarLote(materias, operacoes) {
     let etapa = 'conferir chapéu e foto';
     try {
       if (operacoes.preparar) await operacoes.preparar(aba);
-      if (operacoes.limparLogo) {
-        const logo = await operacoes.limparLogo(aba);
-        if (!logo.ok) {
-          resumo.pendentes++;
-          await operacoes.log('Agência Brasil: ' + logo.aviso);
-          await problema(materia, 'agencia-brasil', 'Agência Brasil: ' + logo.aviso, 'Revisão necessária', indice);
-          continue;
-        }
-        await corrigido(materia, 'agencia-brasil');
-      }
       const estado = await operacoes.ler(aba);
-      if (estado.temChapeu === true) await corrigido(materia, 'chapeu');
-      if (!estado.conferenciaCategoria?.revisar) await corrigido(materia, 'categoria');
       await operacoes.log(estado.temChapeu ? '  Chapéu conferido.' : '  Falta chapéu. Preencha manualmente.');
       await operacoes.log(estado.temImagem === true ? '  Foto conferida.' : estado.temImagem === false
         ? '  Falta foto.' : '  Não foi possível confirmar a foto.');
       if (estado.conferenciaCategoria?.mensagem) await operacoes.log('  ' + estado.conferenciaCategoria.mensagem);
-      if (estado.temChapeu !== true) await problema(materia, 'chapeu', 'Chapéu não confirmado; preencha e revise a matéria.', 'Revisão necessária', indice);
-      if (estado.conferenciaCategoria?.revisar) await problema(materia, 'categoria', estado.conferenciaCategoria.mensagem || 'Categoria exige revisão editorial.', 'Revisão necessária', indice);
       if (estado.temChapeu === true && estado.temImagem === true && !estado.conferenciaCategoria?.revisar) {
         etapa = 'enviar a matéria';
         if (await operacoes.enviar(aba)) {
           resumo.enviadas++;
-          await corrigido(materia);
           etapa = 'fechar a aba';
           await aba.close();
           await operacoes.log('  Matéria enviada. Aba fechada.');
           continue;
         }
-        const motivo = operacoes.motivoPendencia?.(aba) || 'Envio não confirmado. Confira a matéria na aba aberta.';
-        await operacoes.log('  ' + motivo);
-        await problema(materia, 'envio', motivo, 'Revisão necessária', indice);
+        await operacoes.log('  ' + (operacoes.motivoPendencia?.(aba) || 'Envio não confirmado. Confira a matéria na aba aberta.'));
       } else {
         if (estado.temImagem === false) {
           if (podeGerarImagemRJ(estado.categoria, estado.temImagem)) {
@@ -688,12 +539,11 @@ async function processarLote(materias, operacoes) {
         await operacoes.log('  Aba aberta para preenchimento manual.');
       }
       resumo.pendentes++;
-    } catch (erro) {
+    } catch {
       if (interrompido()) break;
       resumo.erros++;
       resumo.pendentes++;
       await operacoes.log(`  Não foi possível ${etapa}. Confira a aba manualmente.`);
-      await problema(materia, `erro-${etapa}`, `Não foi possível ${etapa}: ${erro.message || 'erro não identificado'}.`, 'Erro técnico', indice);
     } finally {
       // A geração ainda controla esta aba; acompanha o envio manual após retomá-la.
       if (!geracoesPendentes.some(tarefa => tarefa.aba === aba && !tarefa.retomada)) {
@@ -827,7 +677,7 @@ async function executar() {
   const janelaAtualizacao = criarGrupoJanelas(context);
   const janelaAdicao = criarGrupoJanelas(context);
   let page = null;
-  console.log(`FLUXO MANUAL — percorrer a fila até: ${TITULO_LIMITE}.`);
+  console.log(`FLUXO MANUAL — até 25 matérias da página filtrada, antes de: ${TITULO_LIMITE}.`);
   async function garantirLogin(
     pagina
   ) {
@@ -1137,7 +987,7 @@ async function executar() {
     return registro;
   }
   // As abas pendentes continuam editáveis entre cliques no painel.
-  await criarPainelManual(context, async (progresso, paginaEscolhida, modo = 'visivel', registrarProblema = async () => {}) => {
+  await criarPainelManual(context, async (progresso, paginaEscolhida, modo = 'visivel') => {
     if (paginaEscolhida !== 1 && paginaEscolhida !== 2) throw new Error('Escolha Página 1 ou Página 2 antes de atualizar.');
     const discreto = modo === 'discreto';
     const trazerParaFrente = modo === 'visivel';
@@ -1160,46 +1010,23 @@ async function executar() {
         ? 'Não foi possível acessar a fila no modo discreto. Confira a janela do Chrome pela barra de tarefas, inclusive o login do CMS.'
         : 'Não foi possível preparar a fila.');
     }
-    // Página 1 ou 2 é somente o início escolhido pela equipe, não o fim da busca.
+    // Antes de ir à página 2, confere se o ponto de parada já está na página 1.
     await selecionarPaginaListagem(paginaTrabalho, 1);
-    await aguardarTabelaListagem(paginaTrabalho);
+    const estadoPrimeira = {};
+    let candidatas = await coletarMaterias(paginaTrabalho, estadoPrimeira);
     if (paginaEscolhida === 2) {
-      const estadoPrimeira = {};
-      await coletarMaterias(paginaTrabalho, estadoPrimeira);
       if (estadoPrimeira.limiteEncontrado) {
+        candidatas = [];
         await progresso('A matéria do jogo do Brasil já está na página 1. A página 2 fica abaixo do limite.');
-        return { abertas:0, enviadas:0, pendentes:0, erros:0, processadas:0,
-          registros:estadoPrimeira.registros, elegiveis:0, ignoradas:0, paginas:1,
-          ultimaMateria:estadoPrimeira.ultimaMateria, limiteEncontrado:true };
+      } else {
+        await progresso('Selecionando a página 2…');
+        await selecionarPaginaListagem(paginaTrabalho, 2);
+        candidatas = await coletarMaterias(paginaTrabalho);
       }
-      await progresso('Selecionando a página 2…');
-      await selecionarPaginaListagem(paginaTrabalho, 2);
     }
-    const busca = await percorrerFilaAteReferencia({ paginaInicial:paginaEscolhida,
-      ativo:() => !paginaTrabalho.isClosed() && contextoTrabalho.pages().length > 0,
-      progresso:async mensagem => { console.log(mensagem); await progresso(mensagem); },
-      lerPagina:async () => {
-        await aguardarTabelaListagem(paginaTrabalho);
-        const estado = {};
-        const materias = await coletarMaterias(paginaTrabalho, estado);
-        return { materias, estado };
-      },
-      avancar:numero => avancarPaginaListagem(paginaTrabalho, numero)
-    });
-    const materias = busca.materias.filter(materia => {
-      if (!enviadas.has(materia.url)) return true;
-      console.log(`[FILTROS] ${materia.titulo}: matéria já enviada nesta sessão.`);
-      busca.ignoradas++;
-      return false;
-    });
-    await progresso(`[FILTROS] ${materias.length} matérias elegíveis para esta rodada; ${busca.ignoradas + busca.duplicadas} ignoradas.`);
-    const aguardarVagas = () => aguardarVagasAtualizacao({
-      ativo:() => !paginaTrabalho.isClosed() && contextoTrabalho.pages().length > 0,
-      progresso,
-      listarAbertas:() => grupoTrabalho.pages().filter(aba => aba !== paginaTrabalho &&
-        !aba.isClosed() && /^\/news\/(?:edit\/\d+|\d+\/edit)\/?$/.test(new URL(aba.url()).pathname)).length
-    });
-    const resumo = await processarFilaEmGrupos(materias, {
+    const materias = candidatas.filter(m => !enviadas.has(m.url));
+    await progresso(`${materias.length} matérias elegíveis na página ${paginaEscolhida}.`);
+    const resumo = await processarLote(materias, {
       abrir: async materia => {
         try {
           const aba = await obterOuAbrirMateria(grupoTrabalho, paginaTrabalho, materia, carregamentos, trazerParaFrente);
@@ -1217,18 +1044,6 @@ async function executar() {
           if (discreto) await instaladoresDiscretos.get(contextoTrabalho)(aba);
           else await instalarFerramentasEditorais(aba);
         } catch (erro) { await registrarAtualizacao(materiasPorAba.get(aba), 'erro'); throw erro; }
-      },
-      limparLogo: async aba => {
-        try {
-          const resultado = await prepararImagensAgenciaBrasil(aba);
-          if (resultado.ok && resultado.removidas) {
-            logosRemovidos.add(aba);
-            console.log(`[AGÊNCIA BRASIL] ${resultado.removidas} logotipo(s) identificado(s) e removido(s); HTML do formulário verificado.`);
-          }
-          return resultado;
-        } catch (erro) {
-          return { ok:false, aviso:`Não foi possível conferir o HTML do corpo (${erro.message}); revisão manual necessária.` };
-        }
       },
       acompanhar: async (aba, materia) => {
         if (acompanhamentos.has(aba) || enviadas.has(materia.url)) return;
@@ -1255,17 +1070,12 @@ async function executar() {
         return confirmado;
       },
       motivoPendencia: aba => motivosEnvio.get(aba),
-      registrarProblema,
       pesquisar: abrirPesquisaImagem,
       gerarImagem: (aba, log = progresso) => gerarImagemRJ(aba, verificarImagemDestaque, log),
-      ativo: () => !paginaTrabalho.isClosed() && contextoTrabalho.pages().length > 0,
+      ativo: () => contextoTrabalho.pages().length > 0,
       log: async mensagem => { console.log(mensagem); await progresso(mensagem); }
-    }, aguardarVagas, progresso);
-    Object.assign(resumo, { registros:busca.registros, elegiveis:materias.length,
-      ignoradas:busca.ignoradas + busca.duplicadas, paginas:busca.paginas,
-      ultimaMateria:busca.ultimaMateria, limiteEncontrado:busca.limiteEncontrado,
-      erroBusca:busca.erroBusca, interrompido:resumo.interrompido || busca.interrompido });
-    console.log(`\nConferência ${busca.limiteEncontrado ? 'até a referência' : 'parcial'}: ${resumo.processadas} processadas; ${resumo.enviadas} enviadas; ${resumo.pendentes} para conferir manualmente; ${resumo.ignoradas} ignoradas.`);
+    });
+    console.log(`\nConferência concluída: ${resumo.enviadas} enviadas; ${resumo.pendentes} para conferir manualmente.`);
     return resumo;
   }, criarEnvioAoSite(context, garantirLogin, async () => {}, () => janelaAdicao.newPage(), registrarAdicao),
   janelaAdicao, historico, compartilhamento, buscadorLinks);
@@ -1279,7 +1089,7 @@ if (require.main === module) {
   });
 }
 
-module.exports = { verificarImagemDestaque, obterOuAbrirMateria, localizarCampoChapeu, abrirMateriaEmSegundoPlano, prepararAbaMateria, converterData, coletarMaterias, percorrerFilaAteReferencia, processarFilaEmGrupos, aguardarVagasAtualizacao, processarLote, lerPendencias, enviarMateria, abrirPesquisaImagem };
+module.exports = { verificarImagemDestaque, obterOuAbrirMateria, localizarCampoChapeu, abrirMateriaEmSegundoPlano, prepararAbaMateria, converterData, coletarMaterias, processarLote, lerPendencias, enviarMateria, abrirPesquisaImagem };
   function normalizar(texto) {
 
     return String(texto || '')
