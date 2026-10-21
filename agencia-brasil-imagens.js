@@ -19,7 +19,7 @@ function analisarImagensAgenciaBrasil(html) {
   imagens.forEach((imagem, indice) => {
     const rotulos = ['alt', 'title', 'aria-label', 'id', 'class', 'data-type', 'data-role']
       .map(atributo => imagem.getAttribute(atributo) || '').filter(Boolean);
-    const urls = ['src', 'data-src', 'data-original'].map(atributo => imagem.getAttribute(atributo) || '')
+    const urls = ['src', 'data-src', 'data-original', 'data-lazy-src'].map(atributo => imagem.getAttribute(atributo) || '')
       .concat((imagem.getAttribute('srcset') || '').split(',').map(item => item.trim().split(/\s+/)[0]))
       .filter(Boolean);
     const nomes = urls.map(nomeArquivo);
@@ -30,22 +30,25 @@ function analisarImagensAgenciaBrasil(html) {
     if (identificada && !imagem.closest('picture')) {
       const figura = imagem.closest('figure');
       if (!figura) {
-        confirmadas.push(imagem);
+        const link = imagem.closest('a');
+        const somenteImagemNoLink = link && link.children.length === 1 &&
+          link.firstElementChild === imagem && [...link.childNodes].every(no =>
+            no === imagem || (no.nodeType === Node.TEXT_NODE && !no.textContent.trim()));
+        confirmadas.push(somenteImagemNoLink ? link : imagem);
       } else {
-        const filhos = [...figura.children];
-        const conteudo = filhos.length === 1 ? filhos[0] : null;
-        const unicoNo = conteudo === imagem ||
-          (conteudo?.tagName === 'A' && Boolean(conteudo.getAttribute('href')) &&
-            conteudo.children.length === 1 && conteudo.firstElementChild === imagem);
-        // O figure do editor só pode conter a imagem (e seu link). Texto,
-        // legenda, outra mídia ou estrutura desconhecida exigem revisão.
+        // Aceita wrappers conhecidos somente quando cada nível contém um
+        // único filho rumo ao logo. Legenda, texto ou outra mídia impedem a remoção.
+        const exclusivo = elemento => {
+          if (elemento === imagem) return true;
+          if (!['FIGURE', 'A', 'DIV', 'SPAN', 'P'].includes(elemento.tagName) ||
+              elemento.children.length !== 1 ||
+              [...elemento.childNodes].some(no => no.nodeType !== Node.ELEMENT_NODE &&
+                (no.nodeType !== Node.TEXT_NODE || no.textContent.trim()))) return false;
+          if (elemento.tagName === 'A' && !elemento.getAttribute('href')) return false;
+          return exclusivo(elemento.firstElementChild);
+        };
         const tipoEditor = figura.getAttribute('data-rx-type');
-        const somenteEspacos = elemento => [...elemento.childNodes].every(no =>
-          no.nodeType === Node.ELEMENT_NODE ||
-          (no.nodeType === Node.TEXT_NODE && !no.textContent.trim()));
-        if ((!tipoEditor || tipoEditor === 'image') && unicoNo &&
-            somenteEspacos(figura) && (conteudo === imagem || somenteEspacos(conteudo)) &&
-            !figura.textContent.trim()) confirmadas.push(figura);
+        if ((!tipoEditor || tipoEditor === 'image') && exclusivo(figura)) confirmadas.push(figura);
         else ambiguas.push(indice + 1);
       }
     } else if (identificada || suspeita) ambiguas.push(indice + 1);
@@ -159,7 +162,6 @@ async function prepararImagensAgenciaBrasil(aba) {
   if (!fonteAberta) {
     previa = await aba.evaluate(analisarImagensAgenciaBrasil, await editor.innerHTML());
     if (previa.ambiguas.length) return { ok: false, removidas: 0, aviso: 'Imagem possivelmente ligada à Agência Brasil no corpo; revisão manual necessária.' };
-    if (!previa.removidas && !formulario?.removidas) return { ok: true, removidas: 0 };
     await alternar.click();
     await fonte.waitFor({ state: 'visible' });
   }
@@ -168,9 +170,14 @@ async function prepararImagensAgenciaBrasil(aba) {
   if (resultado.ambiguas.length) {
     return { ok: false, removidas: 0, aviso: 'Identificação da imagem não é consistente no editor HTML; revisão manual necessária.' };
   }
-  if (!resultado.removidas && !formulario?.removidas) {
+  if (!resultado.removidas && !formulario?.removidas && !previa?.removidas) {
     if (!fonteAberta) await alternar.click();
-    return { ok: true, removidas: 0 };
+    const visual = await aba.evaluate(analisarImagensAgenciaBrasil, await editor.innerHTML());
+    const enviado = await aba.evaluate(analisarImagensAgenciaBrasil, await campoTexto.inputValue());
+    if (visual.removidas || visual.ambiguas.length || enviado.removidas || enviado.ambiguas.length) {
+      return { ok:false, removidas:0, aviso:'Logotipo presente após conferir o editor e o formulário; revisão manual necessária.' };
+    }
+    return { ok:true, removidas:0 };
   }
   // As três representações devem preservar o mesmo conteúdo após a remoção.
   // O editor pode reordenar atributos e serializar entidades de outra forma.

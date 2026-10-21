@@ -38,7 +38,10 @@ async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao 
       const progresso = async mensagem => {
         if (!painel.isClosed()) await painel.evaluate(texto => window.exibirProgresso(texto), mensagem).catch(() => {});
       };
-      const resumo = await atualizar(progresso, paginaEscolhida, modo);
+      const registrarProblema = async evento => {
+        if (!painel.isClosed()) await painel.evaluate(dados => window.registrarProblemaMateria(dados), evento).catch(() => {});
+      };
+      const resumo = await atualizar(progresso, paginaEscolhida, modo, registrarProblema);
       return {ok:!resumo.interrompido,resumo,mensagem:'A conferência foi interrompida.'};
     } catch (erro) {
       return {ok:false,mensagem:erro.message || 'Não foi possível concluir a conferência.'};

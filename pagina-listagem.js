@@ -10,7 +10,7 @@ function estadoListagem(entrada) {
     .map(texto => texto.match(/^(?:p[aá]gina\s*)?(\d+)(?:\s*\(.*\))?$/i)?.[1]).filter(Boolean).map(Number);
   const carregando = [...document.querySelectorAll('.dataTables_processing, .dt-processing, table[aria-busy="true"]')].some(visivel);
   const links = [...document.querySelectorAll('a[href]')].filter(visivel)
-    .map(el => el.getAttribute('href')).filter(href => /\/news\/edit(?:\/|\?)/.test(href));
+    .map(el => el.getAttribute('href')).filter(href => /\/news\/(?:edit\/\d+|\d+\/edit)(?:[/?#]|$)/.test(href));
   const estado = { pagina: atuais.length && atuais.every(n => n === atuais[0]) ? atuais[0] : null,
     paginacao: navegacoes.length > 0, carregando, assinatura: [...new Set(links)].sort().join('|') };
   if (typeof entrada === 'string') return estado;
@@ -19,7 +19,7 @@ function estadoListagem(entrada) {
 }
 
 async function selecionarPaginaListagem(aba, numero) {
-  if (numero !== 1 && numero !== 2) throw new Error('Escolha Página 1 ou Página 2 antes de atualizar.');
+  if (!Number.isInteger(numero) || numero < 1) throw new Error('Número de página inválido na fila.');
   const antes = await aba.evaluate(estadoListagem, PAGINACAO);
   if (!antes.carregando && antes.pagina === numero) return;
   // Sem controles de paginação, a listagem oferece somente a primeira página.
@@ -43,4 +43,47 @@ async function selecionarPaginaListagem(aba, numero) {
     throw new Error('Não foi possível confirmar o carregamento da página ' + numero + '. Nenhuma matéria foi aberta.');
   }
 }
-module.exports = { selecionarPaginaListagem };
+
+async function aguardarTabelaListagem(aba) {
+  try {
+    await aba.waitForFunction(() => {
+      const carregando = [...document.querySelectorAll('.dataTables_processing, .dt-processing, table[aria-busy="true"]')]
+        .some(el => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden');
+      const linhas = [...document.querySelectorAll('table tbody tr, [role="row"]')]
+        .filter(el => el.getClientRects().length > 0 && el.querySelector('td, [role="cell"]'));
+      return !carregando && linhas.length > 0;
+    }, null, { timeout:15000 });
+  } catch {
+    throw new Error('A tabela de notícias não terminou de carregar; nenhuma linha será presumida.');
+  }
+}
+
+async function avancarPaginaListagem(aba, numeroAtual) {
+  const antes = await aba.evaluate(estadoListagem, PAGINACAO);
+  if (!antes.paginacao) return false;
+  if (antes.pagina !== numeroAtual || antes.carregando) {
+    throw new Error(`A página ${numeroAtual} não está confirmada antes de avançar.`);
+  }
+  const navegacao = aba.locator(PAGINACAO).filter({ visible:true });
+  const proximoNumero = numeroAtual + 1;
+  const nomeNumero = new RegExp('^(?:p[aá]gina\\s*)?' + proximoNumero + '$', 'i');
+  const numerico = navegacao.locator('a, button, [role="button"]').filter({ hasText:nomeNumero }).filter({ visible:true });
+  const nomeProximo = /^(?:pr[oó]xim[ao]|next|seguinte|[›»])$/i;
+  const seguinte = navegacao.getByRole('link', { name:nomeProximo })
+    .or(navegacao.getByRole('button', { name:nomeProximo })).filter({ visible:true });
+  const controle = await numerico.count() ? numerico.first() : seguinte.first();
+  if (!await controle.count()) return false;
+  const indisponivel = await controle.evaluate(el => el.matches(':disabled') ||
+    Boolean(el.closest('.disabled, [aria-disabled="true"]')));
+  if (indisponivel) return false;
+  await controle.click();
+  try {
+    await aba.waitForFunction(estadoListagem,
+      { seletor:PAGINACAO, numero:proximoNumero, anterior:antes.assinatura, mesmaPagina:false },
+      { timeout:15000 });
+  } catch {
+    throw new Error(`A navegação para a página ${proximoNumero} não atualizou a tabela; busca interrompida.`);
+  }
+  return true;
+}
+module.exports = { selecionarPaginaListagem, avancarPaginaListagem, aguardarTabelaListagem, estadoListagem };

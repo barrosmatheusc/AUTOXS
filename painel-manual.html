@@ -35,7 +35,20 @@ button:disabled { background: #608871; color: #e9f2ed; cursor: wait; }
 .compartilhar:hover:not(:disabled) { background: #315043; }
 #status { min-height: 24px; color: #a9c4b5; line-height: 1.5; font-size: 14px; margin: 0; }
 #materia { color: #e2ece6; font-size: 14px; line-height: 1.5; margin: 8px 0 0; overflow-wrap: anywhere; }
-#motivo-pendencia { color: #ffe0a1; font-size: 13px; line-height: 1.5; margin: 8px 0 0; overflow-wrap: anywhere; }
+.problemas-materias { margin-top: 22px; padding: 16px; border: 1px solid #8d753d; border-radius: 14px; background: #342d1e; min-width: 0; }
+.problemas-materias[hidden] { display: none; }
+.problemas-materias h2 { margin: 0 0 12px; font-size: 16px; line-height: 1.4; color: #ffe0a1; }
+.problema-cartao { margin-top: 8px; border: 1px solid #8d753d; border-radius: 10px; background: #261f15; min-width: 0; }
+.problema-cartao.corrigido { border-color: #668c77; background: #1b3025; }
+.problema-cartao summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; cursor: pointer; padding: 11px 12px; line-height: 1.45; }
+.problema-titulo { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+.problema-situacao { flex: 0 0 auto; color: #ffe0a1; font-size: 12px; font-weight: 700; }
+.corrigido .problema-situacao { color: #a2edc5; }
+.problema-detalhes { padding: 0 12px 12px; color: #e9dcc0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.problema-detalhes p { margin: 0 0 6px; }
+.problema-detalhes ul { margin: 0 0 8px; padding-left: 20px; }
+.problema-detalhes li + li { margin-top: 5px; }
+.problema-detalhes a { color: #b9e9ce; }
 .summary { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 26px; }
 .summary[hidden] { display: none; }
 .stat { border-radius: 12px; background: #13201a; padding: 18px; }
@@ -57,24 +70,29 @@ footer { color: #91a79b; font-size: 13px; line-height: 1.65; padding: 22px 12px 
     <button id="adicionar" class="adicionar" type="button">Adicionar matérias</button>
     <button id="compartilhar" class="compartilhar" type="button">Links de matérias</button>
     <button id="gerador-artes" class="compartilhar" type="button">Gerador de Artes</button>
-    <div aria-live="polite" role="status"><p id="status">A conferência começa quando você clicar.</p><p id="materia"></p><p id="motivo-pendencia" hidden></p></div>
+    <div aria-live="polite" role="status"><p id="status">A conferência começa quando você clicar.</p><p id="materia"></p></div>
+    <section id="problemas-materias" class="problemas-materias" aria-labelledby="titulo-problemas" hidden>
+      <h2 id="titulo-problemas">⚠️ Matérias com problemas identificados (<span id="contador-problemas">0</span>)</h2>
+      <div id="lista-problemas"></div>
+    </section>
     <div class="summary" id="resumo" hidden>
       <div class="stat"><strong id="enviadas">0</strong><span>matérias enviadas</span></div>
       <div class="stat"><strong id="pendentes">0</strong><span>para conferir manualmente</span></div>
     </div>
   </section>
-  <footer>Até 25 matérias por rodada · Somente acima da matéria do jogo Brasil x Japão<br>Busca de fotos por palavra-chave, com 100 resultados por página.</footer>
+  <footer>Busca paginada até a matéria do jogo Brasil x Japão · Até três abas de edição simultâneas<br>Busca de fotos por palavra-chave, com 100 resultados por página.</footer>
 </div><div id="divisor-paineis" class="divisor-paineis" role="separator" tabindex="0" aria-label="Ajustar largura dos painéis" aria-orientation="vertical" aria-controls="coluna-automacao coluna-producao" aria-valuemin="320" aria-valuemax="440" aria-valuenow="440"></div><section class="coluna-producao" id="coluna-producao" aria-label="Produção AutoXS"><iframe title="Produção AutoXS"></iframe></section></main>
 <dialog id="escolher-pagina" class="materia-dialog" aria-labelledby="titulo-pagina">
-  <header><h2 id="titulo-pagina">Qual página vamos atualizar?</h2><button id="cancelar-pagina" class="secundario fechar" type="button" aria-label="Cancelar escolha da página">×</button></header>
+  <header><h2 id="titulo-pagina">Em qual página vamos começar?</h2><button id="cancelar-pagina" class="secundario fechar" type="button" aria-label="Cancelar escolha da página">×</button></header>
   <div class="miolo">
-    <p class="explicacao">Combine com a outra pessoa qual página cada um vai usar. Serão conferidas até 25 matérias da página escolhida, somente acima de “Quanto foi o jogo Brasil x Japão hoje? Veja resultado dos gols”. Essa matéria e as seguintes não serão abertas.</p>
+    <p class="explicacao">Combine com a outra pessoa a página inicial. O AutoXS continuará pelas páginas seguintes até “Quanto foi o jogo Brasil x Japão hoje? Veja resultado dos gols”. Essa matéria e as seguintes não serão abertas.</p>
     <div class="acoes"><button type="button" data-pagina="1">Página 1</button><button type="button" data-pagina="2">Página 2</button></div>
     <label><input id="atualizacao-discreta" type="checkbox"> Executar em modo Discreto (sem trazer o Chrome para primeiro plano)</label>
     <p class="recado">A escolha não reserva as matérias. No modo normal, o Chrome aparece para você acompanhar e revisar a atualização.</p>
   </div>
 </dialog>
 <script src="divisor-paineis.js"></script>
+<script src="problemas-materias.js"></script>
 <script>
 const botao = document.querySelector('#atualizar');
 const botaoAdicao = document.querySelector('#adicionar');
@@ -136,11 +154,6 @@ escolhaPagina.querySelectorAll('[data-pagina]').forEach(b => b.addEventListener(
 }));
 window.exibirProgresso = mensagem => {
   const texto = String(mensagem).trim();
-  if (texto.startsWith('Agência Brasil:') || texto.startsWith('Revisão editorial:')) {
-    const motivo = document.querySelector('#motivo-pendencia');
-    motivo.textContent = `${document.querySelector('#materia').textContent} — ${texto}`;
-    motivo.hidden = false;
-  }
   if (texto.startsWith('Matéria ')) document.querySelector('#materia').textContent = texto;
   else document.querySelector('#status').textContent = texto;
 };
@@ -148,12 +161,11 @@ async function atualizarPagina(pagina, modo = 'visivel') {
   if (botao.disabled) return;
   botao.disabled = true;
   botao.textContent = 'Atualizando…';
-  document.querySelector('#titulo').textContent = 'Conferindo a página ' + pagina;
-  document.querySelector('#etapa').textContent = 'Página ' + pagina + ' · Rodada em andamento';
+  document.querySelector('#titulo').textContent = 'Conferindo a partir da página ' + pagina;
+  document.querySelector('#etapa').textContent = 'A partir da página ' + pagina + ' · Busca em andamento';
   document.querySelector('#status').textContent = 'Preparando a fila…';
   document.querySelector('#materia').textContent = '';
-  document.querySelector('#motivo-pendencia').textContent = '';
-  document.querySelector('#motivo-pendencia').hidden = true;
+  window.limparProblemasMaterias();
   document.querySelector('#resumo').hidden = true;
   try {
     const resultado = await window.atualizarMaterias({ pagina, modo });
@@ -161,14 +173,22 @@ async function atualizarPagina(pagina, modo = 'visivel') {
     document.querySelector('#enviadas').textContent = resultado.resumo.enviadas;
     document.querySelector('#pendentes').textContent = resultado.resumo.pendentes;
     document.querySelector('#resumo').hidden = false;
+    const contagens = Number.isInteger(resultado.resumo.registros)
+      ? `${resultado.resumo.registros} registros; ${resultado.resumo.elegiveis} elegíveis; ${resultado.resumo.abertas} abas abertas; ${resultado.resumo.processadas} processadas; ${resultado.resumo.enviadas} enviadas; ${resultado.resumo.pendentes} para revisão; ${resultado.resumo.ignoradas} ignoradas. `
+      : '';
+    if (resultado.resumo.limiteEncontrado === false) {
+      document.querySelector('#etapa').textContent = 'Referência Brasil x Japão não encontrada';
+      document.querySelector('#status').textContent = `${contagens}${resultado.resumo.paginas} página(s) verificadas; última matéria: ${resultado.resumo.ultimaMateria || 'nenhuma'}. ${resultado.resumo.erroBusca || 'Confira a paginação e a matéria de referência.'}`;
+      return;
+    }
     document.querySelector('#etapa').textContent = 'Página ' + pagina + ' · Rodada concluída';
-    document.querySelector('#status').textContent = resultado.resumo.abertas
+    document.querySelector('#status').textContent = contagens + (resultado.resumo.abertas
       ? (modo === 'visivel' ? 'Confira as abas que ficaram abertas. Clique em Atualizar quando quiser conferir a fila novamente.' :
         modo === 'discreto' ? (resultado.resumo.pendentes
           ? 'Confira as abas pendentes na janela do Chrome. Após revisar, envie pelo botão do CMS; a aba será fechada quando o envio for confirmado.'
           : 'Rodada discreta concluída. Todas as matérias elegíveis foram conferidas.') :
           'Rodada concluída.')
-      : 'Nenhuma matéria nova na página ' + pagina + '. Você pode atualizar novamente quando quiser.';
+      : 'Nenhuma matéria nova a partir da página ' + pagina + '. Você pode atualizar novamente quando quiser.');
   } catch (erro) {
     document.querySelector('#etapa').textContent = 'A conferência precisa de atenção';
     document.querySelector('#status').textContent = erro.message;

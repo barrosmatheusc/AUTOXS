@@ -58,13 +58,13 @@ test('abre todo o lote primeiro; envia e fecha somente com chapéu e foto', asyn
   assert.deepEqual(resumo, { abertas: 5, enviadas: 1, pendentes: 4, erros: 0 });
 });
 
-test('aceita matérias anteriores a 2026 até a referência e limita a página a 25 abas', async () => {
+test('processarLote não corta matérias depois da 25ª; o controlador limita as abas simultâneas', async () => {
   const lote = [materia('antiga', '31/12/2025 23:59'), ...Array.from({ length: 28 }, (_, i) => materia(i))];
   const estados = Object.fromEntries(lote.map(m => [m.titulo, { temChapeu: false, temImagem: true }]));
   const { operacoes, eventos } = operacoesPara(estados);
   await processarLote(lote, operacoes);
   assert.equal(eventos.some(e => e === 'abrir:Matéria antiga'), true);
-  assert.equal(eventos.filter(e => e.startsWith('abrir:')).length, 25);
+  assert.equal(eventos.filter(e => e.startsWith('abrir:')).length, 29);
 });
 
 test('envio não confirmado mantém a aba aberta', async () => {
@@ -164,15 +164,19 @@ test('coleta usa referência, visibilidade e URL válida sem filtrar pela data i
     { ...materia(6), visivel: false }, { ...materia(7), url: 'https://example.com/news/7/edit' },
     { ...materia(8), links: [materia(8).url, materia(9).url] }
   ];
-  const coletadas = await coletarMaterias(paginaListagem(itens));
+  const estado = {};
+  const coletadas = await coletarMaterias(paginaListagem(itens), estado);
   assert.deepEqual(coletadas.map(m => m.titulo), ['Matéria 1', 'Matéria 2', 'Matéria 3', 'Matéria 4']);
   assert.equal(coletadas[3].data, '31/02/2026');
+  assert.equal(estado.registros, 8);
+  assert.equal(estado.ignoradas.length, 5);
+  assert.equal(estado.limiteEncontrado, false);
 });
 
-test('coleta retorna até 25 matérias elegíveis na página', async () => {
+test('coleta lê todas as matérias elegíveis sem confundir 25 linhas com fim da busca', async () => {
   const itens = Array.from({ length: 30 }, (_, i) => materia(i));
   const coletadas = await coletarMaterias(paginaListagem(itens));
-  assert.equal(coletadas.length, 25);
+  assert.equal(coletadas.length, 30);
 });
 
 function campoSimulado(campo) {
@@ -196,7 +200,24 @@ async function paginaEnvio({ status = 200, confirma = true, valido = true, botao
     <div class="rx-editor" contenteditable="true"><p>Corpo editorial.</p></div>
     <textarea class="rx-source" hidden></textarea>
     ${botao ? '<button type="submit">Enviar</button>' : ''}
-  </form>`;
+  </form>
+  <script>
+    document.querySelector('[data-command="source.toggle"]').addEventListener('click', event => {
+      event.preventDefault();
+      const editor = document.querySelector('.rx-editor');
+      const fonte = document.querySelector('.rx-source');
+      if (fonte.hidden) {
+        fonte.value = editor.innerHTML;
+        editor.hidden = true;
+        fonte.hidden = false;
+      } else {
+        editor.innerHTML = fonte.value;
+        document.querySelector('#inp_text').value = fonte.value;
+        fonte.hidden = true;
+        editor.hidden = false;
+      }
+    });
+  </script>`;
   await contexto.route('**/*', async rota => {
     if (rota.request().method() === 'POST') {
       envios++;
