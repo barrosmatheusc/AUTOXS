@@ -125,7 +125,7 @@ function identidadeMateria(url) {
   } catch { return null; }
 }
 
-async function lerMateriaEmAbaTemporaria(janela, listagem, entrada) {
+async function lerMateriaEmAbaTemporaria(janela, listagem, entrada, sinal) {
   let destino;
   try { destino = new URL(entrada?.url, SITE_PUBLICO); }
   catch { return { ok:false, mensagem:'A URL desta matéria não foi identificada.' }; }
@@ -134,11 +134,17 @@ async function lerMateriaEmAbaTemporaria(janela, listagem, entrada) {
   }
 
   const consulta = await janela.newPage();
+  const interromper = () => { if (!consulta.isClosed()) void consulta.close().catch(() => {}); };
+  sinal?.addEventListener('abort', interromper, { once:true });
   try {
+    if (sinal?.aborted) return { ok:false, mensagem:'Busca cancelada.' };
     // A aba de Últimas continua visível enquanto a matéria é consultada.
-    await listagem.bringToFront().catch(() => {});
+    if (listagem) await listagem.bringToFront().catch(() => {});
     await consulta.goto(destino.href, { waitUntil:'domcontentloaded', timeout:30000 });
-    await listagem.bringToFront().catch(() => {});
+    if (!listagem && identidadeMateria(consulta.url()) !== identidadeMateria(destino.href)) {
+      return { ok:false, mensagem:'A matéria redirecionou para outra URL pública.' };
+    }
+    if (listagem) await listagem.bringToFront().catch(() => {});
 
     const pagina = await consulta.evaluate(({ tituloListagem, chapeuListagem }) => {
       const texto = elemento => (elemento?.textContent || elemento?.content || '').replace(/\s+/g, ' ').trim();
@@ -160,6 +166,7 @@ async function lerMateriaEmAbaTemporaria(janela, listagem, entrada) {
         return '';
       };
       const titulo = String(tituloListagem || '').trim() || primeiroTexto([
+        'main header.news-header h1.news-header__title', 'header.news-header h1.news-header__title',
         'main article h1', 'article h1', 'main h1',
         'meta[property="og:title"]'
       ]);
@@ -221,8 +228,9 @@ async function lerMateriaEmAbaTemporaria(janela, listagem, entrada) {
   } catch (erro) {
     return { ok:false, mensagem:erro.message || 'Não foi possível consultar a página da matéria.' };
   } finally {
+    sinal?.removeEventListener('abort', interromper);
     await consulta.close().catch(() => {});
-    if (!listagem.isClosed()) await listagem.bringToFront().catch(() => {});
+    if (listagem && !listagem.isClosed()) await listagem.bringToFront().catch(() => {});
   }
 }
 
@@ -782,7 +790,8 @@ function instalarInterfaceCompartilhamento() {
       if (urlsDoRecipiente.has(chave)) continue;
       urlsDoRecipiente.add(chave);
       detectadas += 1;
-      candidatosCompartilhamento.push({ url:chave, titulo:lerDadosDoLink(ancora, recipiente).titulo });
+      const dadosLink = lerDadosDoLink(ancora, recipiente);
+      candidatosCompartilhamento.push({ url:chave, titulo:dadosLink.titulo, chapeu:dadosLink.chapeu });
 
       const existente = [...recipiente.querySelectorAll('[data-autoxs-share="true"]')]
         .some(item => item.dataset.autoxsUrl === chave);
@@ -1356,9 +1365,16 @@ function criarCompartilhamento(context, janela) {
     return (await consultarPaginas({ limitePaginas:1 })).candidatos;
   }
 
+  async function consultarMateria(entrada, sinal) {
+    if (sinal?.aborted) return { ok:false, mensagem:'Busca cancelada.' };
+    const contexto = await obterContextoConsulta();
+    return lerMateriaEmAbaTemporaria(contexto, null, entrada, sinal);
+  }
+
   return {
     consultarCandidatos,
     consultarPaginas,
+    consultarMateria,
     fecharConsultas,
     abrir: async () => {
       if (!abrindo) abrindo = abrir().finally(() => { abrindo = null; });

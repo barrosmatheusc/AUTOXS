@@ -2,6 +2,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { extrairDadosPublicacao, urlEdicao } = require('./url-publicacao-cms');
 const { chaveTitulo, encontrarLinkPorTitulo } = require('./compartilhar-materias');
+const { buscarInformacoesNaListagem, validarUrlMateria } = require('./links-manuais');
 
 function dataDaUrl(url) {
   const match = /\/\d{4}\/\d{2}\/\d{2}\//.exec(new URL(url).pathname);
@@ -186,13 +187,14 @@ function criarBuscadorLinks(historico, compartilhamento, {
     ativas:() => [...ativas].map(([id, valor]) => ({ id, mensagem:valor.mensagem })) };
 }
 
-function criarPainelProducao(context, historico, compartilhamento = null, buscadorExterno = null) {
+function criarPainelProducao(context, historico, compartilhamento = null, buscadorExterno = null, buscarMateria = null) {
   const url = pathToFileURL(path.join(__dirname, 'painel-producao.html')).href;
   const urlIntegrada = url + '?integrado=1';
   const buscador = buscadorExterno || criarBuscadorLinks(historico, compartilhamento);
   let pagina = null;
   let abrindo = null;
   let recuperando = null;
+  let buscaManual = null;
   async function recuperarPendentes() {
     if (recuperando) return recuperando;
     recuperando = buscador.procurarPendentes().finally(() => { recuperando = null; });
@@ -213,6 +215,28 @@ function criarPainelProducao(context, historico, compartilhamento = null, buscad
           case 'removerResponsavel': resultado = await historico.removerResponsavel(entrada.id); break;
           case 'definirUrl': resultado = await historico.definirUrl(entrada.id, entrada.url); break;
           case 'compartilhavel': resultado = await historico.compartilhavel(entrada.id); break;
+          case 'buscarMateriaManual': {
+            if (!String(entrada.enviadoPorId || '').trim()) throw new Error('Selecione quem enviou o link antes da busca.');
+            if (buscaManual) throw new Error('Já existe uma busca manual em andamento.');
+            const controlador = new AbortController();
+            buscaManual = controlador;
+            try {
+              const progresso = mensagem => frame.evaluate(texto => window.atualizarBuscaManual?.(texto), mensagem).catch(() => {});
+              resultado = await (buscarMateria || ((url, opcoes) =>
+                buscarInformacoesNaListagem(url, compartilhamento, opcoes)))(entrada.url,
+                { sinal:controlador.signal, progresso });
+              if (controlador.signal.aborted) throw new Error('Busca cancelada.');
+            } finally { if (buscaManual === controlador) buscaManual = null; }
+            break;
+          }
+          case 'cancelarBuscaManual':
+            resultado = Boolean(buscaManual);
+            buscaManual?.abort();
+            break;
+          case 'adicionarMateriaManual':
+            validarUrlMateria(entrada.dados?.url);
+            resultado = await historico.adicionarLinkManual(entrada.dados);
+            break;
           case 'procurarLink': resultado = await buscador.procurar(entrada.id); break;
           case 'cancelarProcura': resultado = buscador.cancelar(entrada.id); break;
           default: throw new Error('Ação desconhecida.');

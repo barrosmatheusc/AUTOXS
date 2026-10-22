@@ -87,6 +87,96 @@ test('POST local envia o corpo sem o figure do logotipo e preserva o texto', asy
   } finally { await mock.context.close(); }
 });
 
+test('Agência Brasil com HTML em várias linhas envia após remover o logo', async () => {
+  const logo = '<figure><a href="https://agenciabrasil.ebc.com.br/"><img alt="Logo Agência Brasil" src="/logo-agenciabrasil.svg"></a></figure>';
+  const corpo = `<p><strong>Primeira linha</strong> e <a href="https://exemplo.test">link</a>.</p>\n${logo}\n<p>Segunda linha.</p>`;
+  const mock = await paginaLocal({ corpoHtml:corpo });
+  try {
+    assert.equal(await enviarMateria(mock.page, false), true);
+    assert.equal(mock.envios(), 1);
+    const enviado = new URLSearchParams(mock.ultimoPost()).get('text');
+    assert.doesNotMatch(enviado, /logo-agenciabrasil\.svg/);
+    assert.match(enviado, /<strong>Primeira linha<\/strong>/);
+    assert.match(enviado, /href="https:\/\/exemplo\.test"/);
+    assert.match(enviado, /Segunda linha/);
+  } finally { await mock.context.close(); }
+});
+
+test('Agência Brasil sem logotipo segue o envio normal e fotografia legítima permanece', async () => {
+  const foto = '<figure><img src="/fotos/reportagem.jpg" alt="Foto: Agência Brasil"><figcaption>Crédito jornalístico</figcaption></figure>';
+  const mock = await paginaLocal({ corpoHtml:`<p>Reportagem preservada.</p>\n${foto}` });
+  try {
+    assert.equal(await enviarMateria(mock.page, false), true);
+    assert.equal(mock.envios(), 1);
+    assert.match(new URLSearchParams(mock.ultimoPost()).get('text'), /reportagem\.jpg/);
+  } finally { await mock.context.close(); }
+});
+
+test('Agência Brasil com logotipo e fotografia preserva a foto ao enviar', async () => {
+  const logo = '<figure><img src="/logo-agenciabrasil.svg" alt="Logo Agência Brasil"></figure>';
+  const foto = '<figure><img src="/fotos/reportagem.jpg" alt="Foto: Agência Brasil"><figcaption>Fotografia legítima</figcaption></figure>';
+  const mock = await paginaLocal({ corpoHtml:`<p>Texto.</p>\n${logo}\n${foto}` });
+  try {
+    assert.equal(await enviarMateria(mock.page, false), true);
+    const enviado = new URLSearchParams(mock.ultimoPost()).get('text');
+    assert.doesNotMatch(enviado, /logo-agenciabrasil\.svg/);
+    assert.match(enviado, /reportagem\.jpg/);
+    assert.match(enviado, /Fotografia legítima/);
+  } finally { await mock.context.close(); }
+});
+
+test('logotipo ambíguo impede envio e mantém a matéria aberta', async () => {
+  const logo = '<figure><img src="/logo-agenciabrasil.svg" alt="Logo Agência Brasil"><figcaption>Legenda editorial</figcaption></figure>';
+  const mock = await paginaLocal({ corpoHtml:`<p>Texto.</p>${logo}` });
+  try {
+    let motivo = '';
+    assert.equal(await enviarMateria(mock.page, false, aviso => { motivo = aviso; }), false);
+    assert.equal(mock.envios(), 0);
+    assert.equal(mock.page.isClosed(), false);
+    assert.match(motivo, /revisão manual/i);
+  } finally { await mock.context.close(); }
+});
+
+test('logotipo não dispensa chapéu nem imagem destacada', async () => {
+  const corpoHtml = '<p>Texto.</p><figure><img src="/logo-agenciabrasil.svg" alt="Logo Agência Brasil"></figure>';
+  for (const opcoes of [{ valor:'' }, { foto:false }]) {
+    const mock = await paginaLocal({ ...opcoes, corpoHtml });
+    try {
+      assert.equal(await enviarMateria(mock.page, false), false);
+      assert.equal(mock.envios(), 0);
+      assert.equal(mock.page.isClosed(), false);
+    } finally { await mock.context.close(); }
+  }
+});
+
+test('Admin9 simulado rejeita envio após remoção: aba permanece aberta', async () => {
+  const corpoHtml = '<p>Texto.</p>\n<figure><img src="/logo-agenciabrasil.svg" alt="Logo Agência Brasil"></figure>';
+  const mock = await paginaLocal({ corpoHtml, erro:true });
+  try {
+    let motivo = '';
+    assert.equal(await enviarMateria(mock.page, false, aviso => { motivo = aviso; }), false);
+    assert.equal(mock.envios(), 1);
+    assert.equal(mock.page.isClosed(), false);
+    assert.doesNotMatch(new URLSearchParams(mock.ultimoPost()).get('text'), /logo-agenciabrasil\.svg/);
+    assert.match(motivo, /HTTP 422/);
+  } finally { await mock.context.close(); }
+});
+
+test('requisição que recoloca o logotipo é bloqueada antes de chegar ao Admin9 simulado', async () => {
+  const logo = '<figure><img src="/logo-agenciabrasil.svg" alt="Logo Agência Brasil"></figure>';
+  const mock = await paginaLocal({ corpoHtml:`<p>Texto.</p>\n${logo}` });
+  try {
+    await mock.page.locator('form').evaluate((form, html) => form.addEventListener('submit', () => {
+      form.querySelector('#inp_text').value += html;
+    }), logo);
+    let motivo = '';
+    assert.equal(await enviarMateria(mock.page, false, aviso => { motivo = aviso; }), false);
+    assert.equal(mock.envios(), 0);
+    assert.equal(mock.page.isClosed(), false);
+    assert.match(motivo, /HTML do corpo não verificável/);
+  } finally { await mock.context.close(); }
+});
+
 test('simulação Fluminense x Santos com HTML descrito: serializações equivalentes preservam a reportagem e removem só o logo', async () => {
   const logo = '<figure style="text-align: center;"><a href="https://agenciabrasil.ebc.com.br/" target="_BLANK"><img alt="Logo Agência Brasil" src="https://cdn.jsdelivr.net/gh/sergiosdlima/assets-ebc@1.0.0/abr/assets/images/logo-agenciabrasil.svg" style="height: 54px;"></a></figure>';
   const foto = '<figure><img src="/fotos/fluminense-santos.jpg" alt="Jogadores durante a partida"><figcaption>Foto do jogo</figcaption></figure>';

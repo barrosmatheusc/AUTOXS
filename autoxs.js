@@ -357,9 +357,12 @@ async function enviarMateria(aba, mostrarAviso = true, informarPendencia = () =>
     }
     try {
       const html = extrairHtmlRequisicao(requisicao);
-      // O corpo esperado já foi analisado no editor/formulário. Conferir os
-      // bytes da requisição evita consultar a Page durante uma navegação POST.
-      const htmlCorreto = !limpeza.removidas || (html !== null && html === corpoEsperado);
+      // O corpo esperado já foi analisado no editor/formulário. Conferir o
+      // conteúdo da requisição evita consultar a Page durante a navegação POST.
+      // O envio de textarea converte quebras LF para CRLF; o conteúdo deve
+      // continuar idêntico em todo o restante, inclusive imagens e links.
+      const htmlCorreto = !limpeza.removidas || (html !== null &&
+        html.replace(/\r\n?/g, '\n') === corpoEsperado.replace(/\r\n?/g, '\n'));
       const categoriaCorreta = !categoriaCorrigida || extrairCategoriaRequisicao(requisicao) === categoriaCorrigida.valor;
       if (htmlCorreto && categoriaCorreta) {
         if (limpeza.removidas) console.log('[AUTOXS][AGÊNCIA BRASIL] Requisição conferida: HTML do corpo sem o logotipo.');
@@ -398,9 +401,16 @@ async function enviarMateria(aba, mostrarAviso = true, informarPendencia = () =>
     informarPendencia(motivoRequisicao);
     return false;
   }
-  if (!resposta || resposta.status() < 200 || resposta.status() >= 400) return false;
+  if (!resposta || resposta.status() < 200 || resposta.status() >= 400) {
+    if (limpeza.removidas) informarPendencia(!resposta
+      ? 'Agência Brasil: não houve resposta confirmada do Admin9 após a limpeza do logotipo; revisão manual necessária.'
+      : `Agência Brasil: Admin9 recusou o envio após a limpeza do logotipo (HTTP ${resposta.status()}); revisão manual necessária.`);
+    return false;
+  }
   // Um clique ou resposta HTTP isolada não confirma que a matéria foi salva.
-  return confirmarSalvamento(aba, mensagensAntes);
+  const confirmado = await confirmarSalvamento(aba, mensagensAntes);
+  if (!confirmado && limpeza.removidas) informarPendencia('Agência Brasil: Admin9 respondeu, mas não confirmou o salvamento após a limpeza do logotipo; revisão manual necessária.');
+  return confirmado;
 }
 
 async function processarLote(materias, operacoes) {

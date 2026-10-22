@@ -1,11 +1,12 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { montarTextoCompartilhamento, chaveTitulo } = require('./compartilhar-materias');
+const { montarTextoCompartilhamento, chaveTitulo, identidadeMateria } = require('./compartilhar-materias');
 
 const FUSO = 'America/Sao_Paulo';
 const URL_PUBLICA = 'tribunadosertao.com.br';
 const INICIAIS = ['Vladimir', 'Cinara', 'Land', 'Léo'];
+const IDS_REDATORES = new Set(['inicial-1', 'inicial-2', 'inicial-3']);
 const situacoes = new Set(['aguardandoRevisao', 'concluido', 'naoConfirmado', 'erro']);
 const operacoes = new Set(['adicionar', 'atualizar']);
 const RETENCAO_MS = 8 * 24 * 60 * 60 * 1000;
@@ -144,9 +145,37 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
       return structuredClone(registro);
     });
   }
+  async function adicionarLinkManual(entrada) {
+    const url = urlPublica(entrada?.url);
+    const identidade = url && identidadeMateria(url);
+    const titulo = String(entrada?.titulo || '').replace(/\s+/g, ' ').trim();
+    const chapeu = String(entrada?.chapeu || '').replace(/\s+/g, ' ').trim();
+    const subtitulo = String(entrada?.subtitulo || '').replace(/\s+/g, ' ').trim();
+    const enviadoPorId = String(entrada?.enviadoPorId || '');
+    if (!identidade) throw new Error('Informe a URL pública de uma matéria do Tribuna do Sertão.');
+    if (!titulo || titulo.length > 500) throw new Error('Confira o título da matéria (até 500 caracteres).');
+    if (chapeu.length > 120 || subtitulo.length > 1000) throw new Error('Chapéu ou subtítulo excede o limite permitido.');
+    return alterar(estado => {
+      const redator = estado.responsaveis.find(item => item.id === enviadoPorId &&
+        IDS_REDATORES.has(item.id) && item.ativo && !item.removido);
+      if (!redator) throw new Error('Selecione um redator disponível em “Enviado por”.');
+      if (estado.registros.some(item => item.urlOriginal && identidadeMateria(item.urlOriginal) === identidade)) {
+        throw new Error('Esta URL já está na Seleção de Links.');
+      }
+      const instante = agora();
+      const registro = { id:randomUUID(), chave:`linkManual:${identidade}`, operacao:'linkManual',
+        origem:'manual', titulo, chapeu, subtitulo, urlOriginal:identidade, urlCms:'',
+        enviadoPor:redator.nome, enviadoPorId:redator.id,
+        criadoEm:instante, concluidoEm:instante, atualizadoEm:instante, situacao:'concluido',
+        formaConclusao:null, responsavelId:null, motivoLinkPendente:'' };
+      estado.registros.push(registro);
+      return structuredClone(registro);
+    });
+  }
   async function responsavel(id, responsavelId) {
     return alterar(estado => {
-      const registro = estado.registros.find(item => item.id === id && item.operacao === 'adicionar' && item.situacao === 'concluido');
+      const registro = estado.registros.find(item => item.id === id &&
+        ['adicionar', 'linkManual'].includes(item.operacao) && item.situacao === 'concluido');
       if (!registro) throw new Error('Matéria publicada não encontrada.');
       if (responsavelId !== null && !estado.responsaveis.some(item => item.id === responsavelId && item.ativo && !item.removido)) {
         throw new Error('Responsável indisponível.');
@@ -271,16 +300,19 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
     const estado = await ler();
     const registros = estado.registros.filter(item => dataLocal(item.concluidoEm || item.criadoEm) === data);
     const concluidos = registros.filter(item => item.situacao === 'concluido');
-    const compartilh = concluidos.filter(item => item.operacao === 'adicionar');
-    return { data, responsaveis: estado.responsaveis, registros,
+    const compartilh = concluidos.filter(item => ['adicionar', 'linkManual'].includes(item.operacao));
+    const producao = registros.filter(item => item.operacao !== 'linkManual');
+    const concluidosProducao = producao.filter(item => item.situacao === 'concluido');
+    return { data, responsaveis: estado.responsaveis,
+      redatores: estado.responsaveis.filter(item => IDS_REDATORES.has(item.id) && item.ativo && !item.removido), registros,
       compartilh: compartilh.sort((a, b) => b.concluidoEm.localeCompare(a.concluidoEm)),
       estatisticas: {
-        concluidas: concluidos.length,
-        atualizacoesAutomaticas: concluidos.filter(item => item.operacao === 'atualizar' && item.formaConclusao === 'automatico').length,
-        finalizadasManualmente: concluidos.filter(item => item.formaConclusao === 'manual').length,
-        adicionadas: compartilh.length,
-        aguardandoRevisao: registros.filter(item => item.situacao === 'aguardandoRevisao').length,
-        erros: registros.filter(item => ['erro', 'naoConfirmado'].includes(item.situacao)).length
+        concluidas: concluidosProducao.length,
+        atualizacoesAutomaticas: concluidosProducao.filter(item => item.operacao === 'atualizar' && item.formaConclusao === 'automatico').length,
+        finalizadasManualmente: concluidosProducao.filter(item => item.formaConclusao === 'manual').length,
+        adicionadas: concluidosProducao.filter(item => item.operacao === 'adicionar').length,
+        aguardandoRevisao: producao.filter(item => item.situacao === 'aguardandoRevisao').length,
+        erros: producao.filter(item => ['erro', 'naoConfirmado'].includes(item.situacao)).length
       } };
   }
   async function materiasPorResponsavel(data = dataLocal(agora())) {
@@ -288,7 +320,7 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
     const estado = await ler(); // Mesma retenção de oito dias usada pelos outros painéis.
     const unicos = new Map();
     const publicados = estado.registros
-      .filter(item => item.operacao === 'adicionar' && item.situacao === 'concluido')
+      .filter(item => ['adicionar', 'linkManual'].includes(item.operacao) && item.situacao === 'concluido')
       .sort((a, b) => String(b.atualizadoEm || b.concluidoEm).localeCompare(String(a.atualizadoEm || a.concluidoEm)));
     for (const item of publicados) {
       const url = urlPublica(item.urlOriginal);
@@ -330,11 +362,12 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
   }
   async function compartilhavel(id) {
     const estado = await ler();
-    const item = estado.registros.find(registro => registro.id === id && registro.operacao === 'adicionar' && registro.situacao === 'concluido');
+    const item = estado.registros.find(registro => registro.id === id &&
+      ['adicionar', 'linkManual'].includes(registro.operacao) && registro.situacao === 'concluido');
     if (!item || !item.urlOriginal) throw new Error('Link original ainda não disponível para esta matéria.');
     return montarTextoCompartilhamento({ chapeu: item.chapeu, titulo: item.titulo, subtitulo: item.subtitulo, url: item.urlOriginal });
   }
-  return { registrar, responsavel, cadastrarResponsavel, editarResponsavel, removerResponsavel, definirUrl, pendentesRecuperaveis,
+  return { registrar, adicionarLinkManual, responsavel, cadastrarResponsavel, editarResponsavel, removerResponsavel, definirUrl, pendentesRecuperaveis,
     definirUrlRecuperada, publicadas, definirUrlCompartilhamento, registrarMotivoLink,
     observar, consultar, materiasPorResponsavel, relatorio, compartilhavel, limparExpirados };
 }
