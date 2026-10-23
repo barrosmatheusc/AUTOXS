@@ -74,7 +74,13 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
     try {
       await fs.writeFile(temporario, JSON.stringify(estado, null, 2) + '\n', { encoding: 'utf8', flag: 'wx' });
       if (sinal?.aborted) throw new Error('Procura cancelada.');
-      await fs.rename(temporario, arquivo);
+      for (let tentativa = 0; ; tentativa++) {
+        try { await fs.rename(temporario, arquivo); break; }
+        catch (erro) {
+          if (!['EPERM', 'EBUSY'].includes(erro.code) || tentativa >= 7) throw erro;
+          await new Promise(resolve => setTimeout(resolve, 25 * (tentativa + 1)));
+        }
+      }
     } finally { await fs.rm(temporario, { force: true }); }
   }
   function avisar() {
@@ -151,21 +157,24 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
     const titulo = String(entrada?.titulo || '').replace(/\s+/g, ' ').trim();
     const chapeu = String(entrada?.chapeu || '').replace(/\s+/g, ' ').trim();
     const subtitulo = String(entrada?.subtitulo || '').replace(/\s+/g, ' ').trim();
-    const enviadoPorId = String(entrada?.enviadoPorId || '');
     if (!identidade) throw new Error('Informe a URL pública de uma matéria do Tribuna do Sertão.');
     if (!titulo || titulo.length > 500) throw new Error('Confira o título da matéria (até 500 caracteres).');
     if (chapeu.length > 120 || subtitulo.length > 1000) throw new Error('Chapéu ou subtítulo excede o limite permitido.');
     return alterar(estado => {
-      const redator = estado.responsaveis.find(item => item.id === enviadoPorId &&
-        IDS_REDATORES.has(item.id) && item.ativo && !item.removido);
-      if (!redator) throw new Error('Selecione um redator disponível em “Enviado por”.');
-      if (estado.registros.some(item => item.urlOriginal && identidadeMateria(item.urlOriginal) === identidade)) {
-        throw new Error('Esta URL já está na Seleção de Links.');
+      const existente = estado.registros.find(item => item.urlOriginal && identidadeMateria(item.urlOriginal) === identidade);
+      if (existente) {
+        if (existente.operacao !== 'linkManual' || !existente.ocultoSelecao) {
+          throw new Error('Esta URL já está na Seleção de Links.');
+        }
+        // Reinclusão explícita recupera o mesmo registro, sem duplicar a URL ou inventar uma publicação.
+        const instante = agora();
+        Object.assign(existente, { titulo, chapeu, subtitulo, ocultoSelecao:false,
+          concluidoEm:instante, atualizadoEm:instante });
+        return structuredClone(existente);
       }
       const instante = agora();
       const registro = { id:randomUUID(), chave:`linkManual:${identidade}`, operacao:'linkManual',
         origem:'manual', titulo, chapeu, subtitulo, urlOriginal:identidade, urlCms:'',
-        enviadoPor:redator.nome, enviadoPorId:redator.id,
         criadoEm:instante, concluidoEm:instante, atualizadoEm:instante, situacao:'concluido',
         formaConclusao:null, responsavelId:null, motivoLinkPendente:'' };
       estado.registros.push(registro);
@@ -181,6 +190,16 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
         throw new Error('Responsável indisponível.');
       }
       registro.responsavelId = registro.responsavelId === responsavelId ? null : responsavelId;
+      registro.atualizadoEm = agora();
+      return structuredClone(registro);
+    });
+  }
+  async function removerDaSelecao(id) {
+    return alterar(estado => {
+      const registro = estado.registros.find(item => item.id === id &&
+        ['adicionar', 'linkManual'].includes(item.operacao) && item.situacao === 'concluido' && !item.ocultoSelecao);
+      if (!registro) throw new Error('Matéria não encontrada na Seleção de Links.');
+      registro.ocultoSelecao = true;
       registro.atualizadoEm = agora();
       return structuredClone(registro);
     });
@@ -300,7 +319,7 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
     const estado = await ler();
     const registros = estado.registros.filter(item => dataLocal(item.concluidoEm || item.criadoEm) === data);
     const concluidos = registros.filter(item => item.situacao === 'concluido');
-    const compartilh = concluidos.filter(item => ['adicionar', 'linkManual'].includes(item.operacao));
+    const compartilh = concluidos.filter(item => ['adicionar', 'linkManual'].includes(item.operacao) && !item.ocultoSelecao);
     const producao = registros.filter(item => item.operacao !== 'linkManual');
     const concluidosProducao = producao.filter(item => item.situacao === 'concluido');
     return { data, responsaveis: estado.responsaveis,
@@ -344,14 +363,29 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
   }
   async function relatorio(data) {
     const consulta = await consultar(data);
-    const grupos = consulta.responsaveis.map(responsavel => ({ responsavel, urls: [] }));
+    const nomesPrioritarios = ['Vladimir', 'Cinara', 'Land', 'Radar', 'Email'];
+    const nomeChave = nome => String(nome || '').trim().toLocaleLowerCase('pt-BR');
+    const gruposPorNome = new Map();
+    for (const nome of nomesPrioritarios) gruposPorNome.set(nomeChave(nome), { responsavel:{ nome }, urls:[] });
+    const idsAtribuidos = new Set(consulta.compartilh.map(item => item.responsavelId).filter(Boolean));
+    for (const responsavel of consulta.responsaveis) {
+      const chave = nomeChave(responsavel.nome);
+      if (idsAtribuidos.has(responsavel.id) && !gruposPorNome.has(chave)) {
+        gruposPorNome.set(chave, { responsavel, urls:[] });
+      } else if (gruposPorNome.has(chave)) {
+        const grupo = gruposPorNome.get(chave);
+        if (!grupo.responsavel.id || (responsavel.ativo && !responsavel.removido)) grupo.responsavel = responsavel;
+      }
+    }
+    const grupos = [...gruposPorNome.values()];
     const semResponsavel = [], semUrl = [], duplicados = [];
     const vistas = new Set();
     for (const item of consulta.compartilh) {
       if (!item.responsavelId) { semResponsavel.push(item); continue; }
       if (!item.urlOriginal) { semUrl.push(item); continue; }
       if (vistas.has(item.urlOriginal)) { duplicados.push(item); continue; }
-      const grupo = grupos.find(grupo => grupo.responsavel.id === item.responsavelId);
+      const responsavel = consulta.responsaveis.find(pessoa => pessoa.id === item.responsavelId);
+      const grupo = responsavel && gruposPorNome.get(nomeChave(responsavel.nome));
       if (!grupo) { semResponsavel.push(item); continue; }
       vistas.add(item.urlOriginal);
       grupo.urls.push(item.urlOriginal);
@@ -367,7 +401,7 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
     if (!item || !item.urlOriginal) throw new Error('Link original ainda não disponível para esta matéria.');
     return montarTextoCompartilhamento({ chapeu: item.chapeu, titulo: item.titulo, subtitulo: item.subtitulo, url: item.urlOriginal });
   }
-  return { registrar, adicionarLinkManual, responsavel, cadastrarResponsavel, editarResponsavel, removerResponsavel, definirUrl, pendentesRecuperaveis,
+  return { registrar, adicionarLinkManual, responsavel, removerDaSelecao, cadastrarResponsavel, editarResponsavel, removerResponsavel, definirUrl, pendentesRecuperaveis,
     definirUrlRecuperada, publicadas, definirUrlCompartilhamento, registrarMotivoLink,
     observar, consultar, materiasPorResponsavel, relatorio, compartilhavel, limparExpirados };
 }

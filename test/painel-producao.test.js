@@ -52,6 +52,9 @@ test('painel local mostra estatísticas, compartilháveis, responsáveis e relat
     await page.locator('#alternar-materias').click();
     assert.equal(await page.locator('.materia-detalhes').isHidden(), true);
     await page.getByRole('button', { name:'Relatório de Links', exact:true }).click();
+    assert.equal(await page.locator('#copiar-relatorio').isDisabled(), true);
+    await page.getByRole('button', { name:'Gerar relatório' }).click();
+    await page.waitForFunction(() => document.querySelector('#texto-relatorio')?.textContent.includes('LINKS VLADIMIR'));
     assert.match(await page.locator('#texto-relatorio').innerText(), /LINKS VLADIMIR/);
   } finally { await page.close(); }
 });

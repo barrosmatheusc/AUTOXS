@@ -135,6 +135,9 @@ test('divisor preserva botões, estatísticas e links da página inicial unifica
     await producao.locator('#alternar-links').click();
     await producao.getByRole('heading', { name:titulo }).waitFor();
     await producao.locator('#alternar-relatorio').click();
+    assert.match(await producao.locator('#texto-relatorio').innerText(), /Nenhum relatório gerado/);
+    await producao.getByRole('button', { name:'Gerar relatório' }).click();
+    await producao.locator('#texto-relatorio').getByText(/tribunadosertao\.com\.br/).waitFor();
     assert.match(await producao.locator('#texto-relatorio').innerText(), /tribunadosertao\.com\.br/);
     assert.equal(context.pages().length, 1);
   } finally { await context.close(); }

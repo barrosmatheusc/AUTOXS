@@ -210,13 +210,13 @@ function criarPainelProducao(context, historico, compartilhamento = null, buscad
           case 'materiasPorResponsavel': resultado = await historico.materiasPorResponsavel(entrada.data); break;
           case 'relatorio': resultado = await historico.relatorio(entrada.data); break;
           case 'responsavel': resultado = await historico.responsavel(entrada.id, entrada.responsavelId ?? null); break;
+          case 'removerDaSelecao': resultado = await historico.removerDaSelecao(entrada.id); break;
           case 'cadastrar': resultado = await historico.cadastrarResponsavel(entrada.nome); break;
           case 'editar': resultado = await historico.editarResponsavel(entrada.id, entrada.mudanca || {}); break;
           case 'removerResponsavel': resultado = await historico.removerResponsavel(entrada.id); break;
           case 'definirUrl': resultado = await historico.definirUrl(entrada.id, entrada.url); break;
           case 'compartilhavel': resultado = await historico.compartilhavel(entrada.id); break;
           case 'buscarMateriaManual': {
-            if (!String(entrada.enviadoPorId || '').trim()) throw new Error('Selecione quem enviou o link antes da busca.');
             if (buscaManual) throw new Error('Já existe uma busca manual em andamento.');
             const controlador = new AbortController();
             buscaManual = controlador;

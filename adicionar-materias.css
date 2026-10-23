@@ -47,10 +47,12 @@
 .cabecalho-adicao p { margin: 0; color: #b8ccc0; line-height: 1.5; }
 .acoes-cabecalho { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
 .acoes-cabecalho button { white-space: nowrap; }
-.grade-materias { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.grade-materias { display: grid; grid-template-columns: repeat(2, minmax(320px, 1fr)); gap: 16px; max-width: 100%; overflow-x: auto; }
 .grade-materias[data-quantidade="1"] { grid-template-columns: minmax(0, 900px); justify-content: center; }
+.grade-materias[data-quantidade="2"] { grid-template-columns: repeat(2, minmax(320px, 1fr)); }
+.grade-materias[data-quantidade="3"] { grid-template-columns: repeat(3, minmax(320px, 1fr)); }
+.grade-materias[data-quantidade="4"] { grid-template-columns: repeat(4, minmax(320px, 1fr)); }
 .grade-materias .editor-materia { width: 100%; min-width: 0; box-sizing: border-box; max-height: none; height: calc(100vh - 130px); min-height: 350px; display: flex; flex-direction: column; overflow: hidden; }
-.grade-materias[data-quantidade="3"] .editor-materia, .grade-materias[data-quantidade="4"] .editor-materia { height: max(350px, calc((100vh - 150px) / 2)); }
 .editor-materia .cabecalho-editor { flex: 0 0 auto; padding: 14px 18px; }
 .editor-materia .cabecalho-editor h2 { font-size: 20px; }
 .editor-materia .estado-identificacao { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; margin: 10px 18px 0; padding: 12px; border: 1px solid #6cad89; border-radius: 9px; background: #233f31; color: #edfff4; font-size: 14px; line-height: 1.45; max-height: 100px; overflow: auto; }
@@ -71,4 +73,4 @@
 .editor-materia .acoes { gap: 8px; }
 .editor-materia .recado { margin-top: 8px; }
 .editor-materia .explicacao { margin: 10px 0 0; font-size: 12px; }
-@media(max-width: 780px) { .grade-materias { grid-template-columns: minmax(0, 1fr); } .cabecalho-adicao { align-items: flex-start; } .painel-adicao { padding: 12px; } }
+@media(max-width: 780px) { .cabecalho-adicao { align-items: flex-start; } .painel-adicao { padding: 12px; } }

@@ -18,6 +18,46 @@ async function comHistorico(executar) {
 const url1 = 'https://www.tribunadosertao.com.br/cidades/2026/10/15/1234-noticia-um';
 const url2 = 'https://www.tribunadosertao.com.br/politica/2026/10/15/1235-noticia-dois';
 
+test('remoção por ID retira matéria automática da Seleção e Relatório sem apagar produção ou título semelhante', async () => {
+  await comHistorico(async ({ historico, arquivo }) => {
+    const primeiro = await historico.registrar({ operacao:'adicionar', chave:'primeiro', titulo:'Notícia um',
+      situacao:'concluido', formaConclusao:'automatico', urlOriginal:url1 });
+    const segundo = await historico.registrar({ operacao:'adicionar', chave:'segundo', titulo:'Notícia um!',
+      situacao:'concluido', formaConclusao:'automatico', urlOriginal:url2 });
+    await historico.responsavel(primeiro.id, 'inicial-1');
+    await historico.responsavel(segundo.id, 'inicial-2');
+    const antes = await historico.relatorio('2026-10-15');
+    assert.match(antes.texto, /1234-noticia-um/);
+    assert.match(antes.texto, /1235-noticia-dois/);
+    await historico.removerDaSelecao(primeiro.id);
+    const reaberto = criarHistoricoProducao(arquivo, () => new Date('2026-10-15T15:00:00.000Z'));
+    const consulta = await reaberto.consultar('2026-10-15');
+    assert.deepEqual(consulta.compartilh.map(item => item.id), [segundo.id]);
+    assert.equal(consulta.registros.find(item => item.id === primeiro.id).responsavelId, 'inicial-1');
+    assert.equal(consulta.estatisticas.adicionadas, 2);
+    const depois = await reaberto.relatorio('2026-10-15');
+    assert.doesNotMatch(depois.texto, /1234-noticia-um/);
+    assert.match(depois.texto, /1235-noticia-dois/);
+    assert.equal((await reaberto.materiasPorResponsavel('2026-10-15')).dia.total, 2);
+    await assert.rejects(reaberto.removerDaSelecao(primeiro.id), /não encontrada/);
+  });
+});
+
+test('remoção de matéria manual mantém o registro original e não reaparece no Relatório', async () => {
+  await comHistorico(async ({ historico, arquivo }) => {
+    const manual = await historico.adicionarLinkManual({ url:url1, titulo:'Manual' });
+    const outra = await historico.adicionarLinkManual({ url:url2, titulo:'Outra' });
+    await historico.responsavel(manual.id, 'inicial-1');
+    await historico.responsavel(outra.id, 'inicial-2');
+    await historico.removerDaSelecao(manual.id);
+    const reaberto = criarHistoricoProducao(arquivo, () => new Date('2026-10-15T15:00:00.000Z'));
+    assert.deepEqual((await reaberto.consultar('2026-10-15')).compartilh.map(item => item.id), [outra.id]);
+    assert.doesNotMatch((await reaberto.relatorio('2026-10-15')).texto, /1234-noticia-um/);
+    assert.match((await reaberto.relatorio('2026-10-15')).texto, /1235-noticia-dois/);
+    assert.equal((await reaberto.consultar('2026-10-15')).registros.find(item => item.id === manual.id).ocultoSelecao, true);
+  });
+});
+
 test('preparação não conta como conclusão; confirmação manual/automática conta uma única vez', async () => {
   await comHistorico(async ({ historico, avancar }) => {
     await historico.registrar({ operacao:'adicionar', chave:'rascunho-1', titulo:'Notícia um', situacao:'aguardandoRevisao' });
@@ -58,12 +98,12 @@ test('responsável único pode ser escolhido, trocado, removido e recuperado do 
     const novo = await historico.cadastrarResponsavel('Paula');
     await historico.responsavel(materia.id, 'inicial-1');
     await historico.responsavel(materia.id, novo.id);
-    let outro = criarHistoricoProducao(arquivo);
+    let outro = criarHistoricoProducao(arquivo, () => new Date('2026-10-15T15:00:00.000Z'));
     assert.equal((await outro.consultar('2026-10-15')).compartilh[0].responsavelId, novo.id);
     await outro.responsavel(materia.id, novo.id);
     assert.equal((await historico.consultar('2026-10-15')).compartilh[0].responsavelId, null);
     await historico.editarResponsavel(novo.id, { nome:'Paula Lima', ativo:false });
-    outro = criarHistoricoProducao(arquivo);
+    outro = criarHistoricoProducao(arquivo, () => new Date('2026-10-15T15:00:00.000Z'));
     assert.deepEqual((await outro.consultar('2026-10-15')).responsaveis.find(item => item.id === novo.id), { id:novo.id, nome:'Paula Lima', ativo:false });
   });
 });
@@ -136,6 +176,40 @@ test('relatório separa dia e responsável, deduplica URLs e aponta pendências'
   });
 });
 
+test('relatório tem ordem fixa, une cadastros antigos do mesmo nome e preserva ordem da Seleção', async () => {
+  await comHistorico(async ({ historico }) => {
+    const radarAntigo = await historico.cadastrarResponsavel('Radar');
+    const antigo = await historico.registrar({ operacao:'adicionar', chave:'primeira-radar', titulo:'primeira-radar',
+      situacao:'concluido', formaConclusao:'automatico',
+      urlOriginal:'https://www.tribunadosertao.com.br/cidades/2026/10/15/1236-radar-antigo' });
+    await historico.responsavel(antigo.id, radarAntigo.id);
+    await historico.removerResponsavel(radarAntigo.id);
+    const radarAtual = await historico.cadastrarResponsavel('Radar');
+    const email = await historico.cadastrarResponsavel('Email');
+    const entradas = [
+      ['vladimir','inicial-1','1237-vladimir'],
+      ['segunda-radar',radarAtual.id,'1238-radar-novo'],
+      ['email',email.id,'1239-email'],
+      ['land','inicial-3','1240-land'],
+      ['cinara','inicial-2','1241-cinara']
+    ];
+    for (const [chave, responsavelId, sufixo] of entradas) {
+      const item = await historico.registrar({ operacao:'adicionar', chave, titulo:chave,
+        situacao:'concluido', formaConclusao:'automatico',
+        urlOriginal:`https://www.tribunadosertao.com.br/cidades/2026/10/15/${sufixo}` });
+      await historico.responsavel(item.id, responsavelId);
+    }
+    const relatorio = await historico.relatorio('2026-10-15');
+    assert.deepEqual([...relatorio.texto.matchAll(/LINKS ([^\n]+)/g)].slice(0,5).map(match=>match[1]),
+      ['VLADIMIR','CINARA','LAND','RADAR','EMAIL']);
+    assert.equal((relatorio.texto.match(/^LINKS /gm)||[]).length,5);
+    assert.equal((relatorio.texto.match(/LINKS RADAR/g)||[]).length, 1);
+    const radar = relatorio.grupos.find(grupo=>grupo.responsavel.nome==='Radar');
+    assert.deepEqual(radar.urls.map(item=>item.split('/').at(-1)), ['1236-radar-antigo','1238-radar-novo']);
+    assert.equal((relatorio.texto.match(/1236-radar-antigo/g)||[]).length,1);
+  });
+});
+
 test('compartilhável usa formato editorial e só URL pública original', async () => {
   await comHistorico(async ({ historico }) => {
     const item = await historico.registrar({ operacao:'adicionar', chave:'a', titulo:'Título', chapeu:'CIDADES', subtitulo:'Resumo', situacao:'concluido', formaConclusao:'manual' });
@@ -162,7 +236,7 @@ test('recuperação isolada consulta somente edição identificada e persiste UR
     } };
     assert.equal(await recuperarLinksPendentes(historico, request), 1);
     assert.deepEqual(consultas, [cms]);
-    const reaberto = criarHistoricoProducao(arquivo);
+    const reaberto = criarHistoricoProducao(arquivo, () => new Date('2026-10-15T15:00:00.000Z'));
     const registros = (await reaberto.consultar('2026-10-15')).compartilh;
     assert.equal(registros.find(registro => registro.id === item.id).urlOriginal, url1);
     assert.equal(registros.find(registro => registro.id === antigo.id).urlOriginal, '');

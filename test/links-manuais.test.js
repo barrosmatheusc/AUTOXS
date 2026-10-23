@@ -130,7 +130,7 @@ test('limite e cancelamento impedem nova navegação e resultado tardio', async 
   }), /Busca cancelada/);
 });
 
-test('registro manual exige redator, confirmação pelo método de inclusão e URL única', async () => {
+test('registro manual entra sem remetente, aceita atribuição posterior e mantém URL única', async () => {
   const pasta = await fs.mkdtemp(path.join(os.tmpdir(), 'autoxs-link-manual-'));
   const arquivo = path.join(pasta, 'historico.json');
   const relogio = () => new Date('2026-10-22T15:00:00Z');
@@ -138,23 +138,21 @@ test('registro manual exige redator, confirmação pelo método de inclusão e U
   try {
     const dados = await buscarInformacoes(url, resposta(cabecalho+fim));
     assert.equal((await historico.consultar('2026-10-22')).compartilh.length, 0);
-    await assert.rejects(historico.adicionarLinkManual(dados), /Selecione um redator/);
-    await assert.rejects(historico.adicionarLinkManual({ ...dados, enviadoPorId:'inicial-4' }), /Selecione um redator/);
-    const incluido = await historico.adicionarLinkManual({ ...dados, chapeu:'POLÍTICA', subtitulo:'Linha fina.', enviadoPorId:'inicial-2' });
+    const incluido = await historico.adicionarLinkManual({ ...dados, chapeu:'POLÍTICA', subtitulo:'Linha fina.' });
     assert.equal(incluido.origem, 'manual');
-    assert.equal(incluido.enviadoPor, 'Cinara');
-    assert.equal(incluido.enviadoPorId, 'inicial-2');
+    assert.equal(incluido.enviadoPor, undefined);
+    assert.equal(incluido.responsavelId, null);
     assert.equal(incluido.concluidoEm, '2026-10-22T15:00:00.000Z');
     const reaberto = criarHistoricoProducao(arquivo, relogio);
     const consulta = await reaberto.consultar('2026-10-22');
     assert.equal(consulta.compartilh.length, 1);
-    assert.equal(consulta.compartilh[0].enviadoPor, 'Cinara');
+    assert.equal(consulta.compartilh[0].enviadoPor, undefined);
     assert.equal(consulta.estatisticas.adicionadas, 0); // Não foi publicada pelo AutoXS.
     assert.equal(await reaberto.compartilhavel(incluido.id), '*POLÍTICA*\n\n*Título & notícia*\n\n*_Linha fina._*\n\n'+url);
-    await assert.rejects(reaberto.adicionarLinkManual({ ...dados, enviadoPorId:'inicial-1', url:url+'?utm_source=grupo' }), /já está/);
+    await assert.rejects(reaberto.adicionarLinkManual({ ...dados, url:url+'?utm_source=grupo' }), /já está/);
     const automatico = await reaberto.registrar({ operacao:'adicionar', chave:'cms-1', titulo:'Outra matéria',
       situacao:'concluido', formaConclusao:'manual', urlOriginal:'https://www.tribunadosertao.com.br/cidades/2026/10/22/99-outra' });
-    await assert.rejects(reaberto.adicionarLinkManual({ ...dados, enviadoPorId:'inicial-1', url:automatico.urlOriginal }), /já está/);
+    await assert.rejects(reaberto.adicionarLinkManual({ ...dados, url:automatico.urlOriginal }), /já está/);
     assert.equal((await reaberto.consultar('2026-10-22')).compartilh.length, 2);
     assert.equal((await reaberto.relatorio('2026-10-22')).semResponsavel.length, 2);
     await reaberto.responsavel(incluido.id, 'inicial-1');
@@ -169,5 +167,25 @@ test('registro manual exige redator, confirmação pelo método de inclusão e U
     await fs.writeFile(arquivo, JSON.stringify(arquivoAntigo));
     assert.equal((await reaberto.consultar('2026-10-22')).compartilh.find(item => item.id === incluido.id).enviadoPor,
       'Redatora de registro anterior');
+  } finally { await fs.rm(pasta, { recursive:true, force:true }); }
+});
+
+test('reinclusão explícita de URL manual removida restaura o mesmo cartão sem duplicar histórico', async () => {
+  const pasta = await fs.mkdtemp(path.join(os.tmpdir(), 'autoxs-link-reincluir-'));
+  const arquivo = path.join(pasta, 'historico.json');
+  const historico = criarHistoricoProducao(arquivo, () => new Date('2026-10-22T15:00:00Z'));
+  try {
+    const primeiro = await historico.adicionarLinkManual({ url, titulo:'Título inicial' });
+    await historico.removerDaSelecao(primeiro.id);
+    assert.equal((await historico.consultar('2026-10-22')).compartilh.length, 0);
+    const restaurado = await historico.adicionarLinkManual({ url, titulo:'Título conferido', chapeu:'POLÍTICA' });
+    assert.equal(restaurado.id, primeiro.id);
+    assert.equal(restaurado.ocultoSelecao, false);
+    const reaberto = criarHistoricoProducao(arquivo, () => new Date('2026-10-22T15:00:00Z'));
+    const consulta = await reaberto.consultar('2026-10-22');
+    assert.equal(consulta.registros.length, 1);
+    assert.equal(consulta.compartilh[0].titulo, 'Título conferido');
+    assert.equal(consulta.estatisticas.adicionadas, 0);
+    await assert.rejects(reaberto.adicionarLinkManual({ url, titulo:'Duplicata' }), /já está/);
   } finally { await fs.rm(pasta, { recursive:true, force:true }); }
 });
