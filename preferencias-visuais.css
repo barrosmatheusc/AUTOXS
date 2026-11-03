@@ -11,6 +11,7 @@ html[data-tamanho="ampliado"] { zoom: 1.12; }
   font-size: 19px; line-height: 1; box-shadow: 0 2px 10px #0005;
 }
 #abrir-configuracoes:hover { background: #315043; }
+#configuracoes[open] { display: flex; flex-direction: column; }
 #configuracoes {
   width: min(780px, calc(100vw - 24px)); max-height: min(760px, calc(100vh - 24px));
   padding: 0; border: 1px solid #577563; border-radius: 18px;
@@ -18,8 +19,12 @@ html[data-tamanho="ampliado"] { zoom: 1.12; }
   overflow: hidden;
 }
 #configuracoes::backdrop { background: #07120cbb; }
+/* O zoom aplicado em html escala o diálogo depois que o 100vh já foi medido,
+   então o teto de altura desconta o mesmo fator para não passar da janela. */
+html[data-tamanho="compacto"] #configuracoes { max-height: min(760px, calc((100vh - 24px) / .9)); }
+html[data-tamanho="ampliado"] #configuracoes { max-height: min(760px, calc((100vh - 24px) / 1.12)); }
 #configuracoes .config-cabecalho, #configuracoes .config-rodape {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 12px;
   padding: 15px 20px; background: #1b2824;
 }
 #configuracoes .config-cabecalho { border-bottom: 1px solid #354d40; }
@@ -28,10 +33,10 @@ html[data-tamanho="ampliado"] { zoom: 1.12; }
 #configuracoes h3 { margin: 0 0 16px; font-size: 18px; }
 #configuracoes button { width: auto; margin: 0; padding: 8px 11px; font-size: 13px; }
 #fechar-configuracoes { font-size: 22px !important; line-height: 1; background: transparent !important; color: inherit !important; }
-#configuracoes .config-abas { display: flex; gap: 5px; padding: 12px 20px 0; overflow-x: auto; }
+#configuracoes .config-abas { display: flex; flex: 0 0 auto; gap: 5px; padding: 12px 20px 0; overflow-x: auto; }
 #configuracoes .config-abas button { flex: 0 0 auto; background: #263d34; color: #d7f6e5; border: 1px solid #456353; white-space: nowrap; }
 #configuracoes .config-abas button[aria-current="true"] { background: #a2edc5; color: #10281b; }
-#configuracoes .config-conteudo { padding: 20px; overflow-y: auto; max-height: calc(100vh - 210px); }
+#configuracoes .config-conteudo { flex: 1 1 auto; min-height: 0; padding: 20px; overflow-y: auto; }
 #configuracoes [data-config-secao][hidden] { display: none; }
 #configuracoes label:not(.config-check) { display: grid; gap: 7px; margin: 0 0 16px; font-size: 14px; }
 #configuracoes select { width: min(100%, 360px); padding: 9px; border-radius: 8px; border: 1px solid #668c77; background: #101d17; color: inherit; font: inherit; }

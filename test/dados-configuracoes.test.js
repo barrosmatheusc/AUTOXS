@@ -220,3 +220,71 @@ test('arquivo exportado pela própria instalação é identificado na prévia', 
     await fs.rm(pasta, { recursive:true, force:true });
   }
 });
+
+// Regressão: a Central de Configurações tinha o miolo preso a
+// "max-height: calc(100vh - 210px)", um chute para a altura do cabeçalho, das
+// abas e do rodapé. Em tela menor ou com zoom a soma passava do teto do
+// diálogo, que tem overflow: hidden, e o conteúdo era cortado sem barra de
+// rolagem: o botão "Confirmar importação" ficava inalcançável.
+for (const tela of [{ largura:1280, altura:900, tamanho:'normal' },
+  { largura:1920, altura:1080, tamanho:'normal' },
+  { largura:649, altura:583, tamanho:'ampliado' },
+  { largura:800, altura:460, tamanho:'compacto' }]) {
+  test(`prévia longa continua rolável e confirmável em ${tela.largura}x${tela.altura} (${tela.tamanho})`, async () => {
+    const browser = await chromium.launch({ channel:'msedge', headless:true });
+    const contexto = await browser.newContext({ viewport:{ width:tela.largura, height:tela.altura } });
+    const pagina = await contexto.newPage();
+    let confirmou = false;
+    await pagina.exposeFunction('configuracoesAutoXS', async () => ({ ok:true,
+      preferencias:{ tema:'escuro', tamanho:tela.tamanho, logsDetalhados:false,
+        confirmacoes:false, pastaVideos:'' }, versao:'1.0.0' }));
+    await pagina.exposeFunction('dadosAutoXS', async pedido => {
+      if (pedido.acao === 'confirmar') { confirmou = true; return { ok:true,
+        resultado:{ novosTotais:1, atualizadosTotais:0, novosLinks:20 } }; }
+      return { ok:true, token:'teste', previa:{
+        novosTotais:1, atualizadosTotais:0, novosLinks:20,
+        repetidos:0, expirados:0, invalidos:0, ambiguos:0, linksRepetidos:0,
+        arquivo:{ instalacao:'8f2c1a3b-0000-4000-8000-000000000000', dia:'2026-11-03',
+          exportadoEm:'2026-11-03T19:17:07.624Z', propria:false },
+        recebidos:{ concluidas:161, atualizacoesAutomaticas:79, finalizadasManualmente:82,
+          adicionadas:2, aguardandoRevisao:2, erros:0 },
+        jaContabilizados:{ concluidas:0, atualizacoesAutomaticas:0, finalizadasManualmente:0,
+          adicionadas:0, aguardandoRevisao:0, erros:0 },
+        acrescimo:{ concluidas:161, atualizacoesAutomaticas:79, finalizadasManualmente:82,
+          adicionadas:2, aguardandoRevisao:2, erros:0 },
+        // Vinte títulos longos: a prévia mais alta que o painel chega a mostrar.
+        titulosNovos:Array.from({ length:20 },
+          (valor, indice) => `Matéria ${indice + 1} com um título bastante longo para esticar a prévia`) } };
+    });
+    try {
+      await pagina.goto(pathToFileURL(path.join(__dirname, '..', 'painel-manual.html')).href);
+      await pagina.getByRole('button', { name:'Configurações' }).click();
+      await pagina.getByRole('button', { name:'Dados e Sincronização' }).click();
+      await pagina.locator('#dados-arquivo').setInputFiles({ name:'hoje.json',
+        mimeType:'application/json', buffer:Buffer.from('{"versao":1}') });
+      await pagina.locator('#dados-previa').waitFor({ state:'visible' });
+
+      const medidas = await pagina.evaluate(() => {
+        const caixa = elemento => elemento.getBoundingClientRect();
+        const miolo = document.querySelector('.config-conteudo');
+        return { dialogo:caixa(document.querySelector('#configuracoes')).bottom,
+          rodapeTopo:caixa(document.querySelector('.config-rodape')).top,
+          rodapeBase:caixa(document.querySelector('.config-rodape')).bottom,
+          janela:window.innerHeight, rolavel:miolo.scrollHeight > miolo.clientHeight };
+      });
+      // O diálogo inteiro, rodapé incluído, precisa caber na janela...
+      assert.ok(medidas.dialogo <= medidas.janela + 1,
+        `o diálogo passa da janela: ${medidas.dialogo} > ${medidas.janela}`);
+      assert.ok(medidas.rodapeTopo >= -1 && medidas.rodapeBase <= medidas.janela + 1,
+        `o rodapé saiu da janela: ${medidas.rodapeTopo}–${medidas.rodapeBase} em ${medidas.janela}`);
+      // ...e o que não couber tem de rolar, em vez de ser cortado.
+      assert.equal(medidas.rolavel, true, 'a prévia longa deveria deixar o miolo rolável');
+
+      // Sem rolagem manual: se o botão não for alcançável, o clique estoura.
+      await pagina.locator('#dados-confirmar').click();
+      await pagina.locator('#confirmar-sim').click();
+      await pagina.getByText(/Histórico anterior preservado/).waitFor();
+      assert.equal(confirmou, true);
+    } finally { await contexto.close(); await browser.close(); }
+  });
+}
