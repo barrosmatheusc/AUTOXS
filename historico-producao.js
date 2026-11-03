@@ -2,7 +2,8 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { montarTextoCompartilhamento, chaveTitulo, identidadeMateria } = require('./compartilhar-materias');
-const { exportarRegistros, classificarImportacao } = require('./dados-transferencia');
+const { contar, somar, totaisVazios, lerTotaisImportados, exportarTotais,
+  classificarTotais, aplicarTotais } = require('./dados-transferencia-totais');
 
 const FUSO = 'America/Maceio';
 const URL_PUBLICA = 'tribunadosertao.com.br';
@@ -62,6 +63,7 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
   }
   function filtrarExpirados(estado) {
     const quantidade = estado.registros.length;
+    let diasRemovidos = 0;
     // Sem data confiável, o registro não aparece nos painéis, mas também não
     // é apagado automaticamente como se sua idade fosse conhecida.
     estado.registros = estado.registros.filter(item => {
@@ -69,11 +71,17 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
       const instante = typeof referencia === 'string' ? Date.parse(referencia) : NaN;
       return !Number.isFinite(instante) || dataLocal(instante) >= primeiroDiaAtivo(relogio());
     });
-    return quantidade - estado.registros.length;
+    if (estado.totaisImportados) for (const dia of Object.keys(estado.totaisImportados)) {
+      if (dia < primeiroDiaAtivo(relogio())) { delete estado.totaisImportados[dia]; diasRemovidos++; }
+    }
+    return quantidade - estado.registros.length + diasRemovidos;
   }
   async function ler() {
     const estado = await lerArquivo();
     estado.registros = estado.registros.filter(dentroDoPrazo);
+    if (estado.totaisImportados) for (const dia of Object.keys(estado.totaisImportados)) {
+      if (dia < primeiroDiaAtivo(relogio()) || dia > dataLocal(relogio())) delete estado.totaisImportados[dia];
+    }
     return estado;
   }
   async function gravar(estado, sinal = null) {
@@ -342,19 +350,16 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
     const registros = estado.registros.filter(item => dataLocal(item.concluidoEm || item.criadoEm) === data);
     const concluidos = registros.filter(item => item.situacao === 'concluido');
     const compartilh = concluidos.filter(item => ['adicionar', 'linkManual'].includes(item.operacao) && !item.ocultoSelecao);
-    const producao = registros.filter(item => item.operacao !== 'linkManual');
-    const concluidosProducao = producao.filter(item => item.situacao === 'concluido');
+    const locais = registros.filter(item => !item.origemInstalacao);
+    const estatisticasLocais = contar(locais);
+    const estatisticasImportadas = totaisVazios();
+    for (const importado of lerTotaisImportados(estado, data, dataLocal).values())
+      somar(estatisticasImportadas, importado.totais);
+    const estatisticas = somar({ ...estatisticasLocais }, estatisticasImportadas);
     return { data, responsaveis: estado.responsaveis,
       redatores: estado.responsaveis.filter(item => IDS_REDATORES.has(item.id) && item.ativo && !item.removido), registros,
       compartilh: compartilh.sort((a, b) => b.concluidoEm.localeCompare(a.concluidoEm)),
-      estatisticas: {
-        concluidas: concluidosProducao.length,
-        atualizacoesAutomaticas: concluidosProducao.filter(item => item.operacao === 'atualizar' && item.formaConclusao === 'automatico').length,
-        finalizadasManualmente: concluidosProducao.filter(item => item.formaConclusao === 'manual').length,
-        adicionadas: concluidosProducao.filter(item => item.operacao === 'adicionar').length,
-        aguardandoRevisao: producao.filter(item => item.situacao === 'aguardandoRevisao').length,
-        erros: producao.filter(item => ['erro', 'naoConfirmado'].includes(item.situacao)).length
-      } };
+      estatisticas, estatisticasLocais, estatisticasImportadas };
   }
   async function materiasPorResponsavel(data = dataLocal(agora())) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(data) || dataLocal(`${data}T12:00:00-03:00`) !== data) throw new Error('Escolha uma data válida.');
@@ -425,30 +430,26 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
   }
   const transferencia = { dataLocal, urlPublica };
   async function exportarDadosHoje(instalacao) {
-    return exportarRegistros(await ler(), instalacao, relogio(), transferencia);
+    return exportarTotais(await ler(), instalacao, relogio(), transferencia);
   }
-  async function preverImportacao(documento) {
-    const { resumo, novos } = classificarImportacao(documento, await ler(), relogio(), transferencia);
-    return { ...resumo, titulosNovos:novos.slice(0, 20).map(item => item.titulo) };
+  async function preverImportacao(documento, instalacao) {
+    const plano = classificarTotais(documento, await ler(), instalacao, relogio(), transferencia);
+    return { ...plano.resumo, titulosNovos:plano.links.slice(0, 20).map(item => item.titulo),
+      assinatura:plano.assinatura, arquivo:plano.arquivo, recebidos:plano.recebidos,
+      jaContabilizados:plano.jaContabilizados, acrescimo:plano.acrescimo };
   }
-  async function importarDadosHoje(documento, esperado) {
+  async function importarDadosHoje(documento, esperado, instalacao) {
     if (!esperado || typeof esperado !== 'object') throw new Error('Confira a prévia antes de importar.');
+    const primeira = classificarTotais(documento, await ler(), instalacao, relogio(), transferencia);
+    if (primeira.assinatura !== esperado.assinatura)
+      throw new Error('O histórico mudou após a prévia. Confira novamente antes de importar.');
+    if (!primeira.estatisticas.length && !primeira.links.length) return primeira.resumo;
     return alterar(estado => {
-      const { resumo, novos, atualizacoes } = classificarImportacao(documento, estado, relogio(), transferencia);
-      for (const chave of ['novos', 'atualizados', 'repetidos', 'expirados', 'invalidos', 'ambiguos']) {
-        if (resumo[chave] !== esperado[chave])
-          throw new Error('O histórico mudou após a prévia. Confira novamente antes de importar.');
-      }
-      if (!novos.length && !atualizacoes.length) throw new Error('Não há registros novos ou atualizações seguras para importar.');
-      for (const { existente, item } of atualizacoes) {
-        Object.assign(existente, { situacao:item.situacao, formaConclusao:item.formaConclusao,
-          concluidoEm:item.concluidoEm, titulo:item.titulo || existente.titulo,
-          chapeu:item.chapeu || existente.chapeu, subtitulo:item.subtitulo || existente.subtitulo,
-          urlOriginal:item.urlOriginal || existente.urlOriginal,
-          atualizadoEm:item.atualizadoEm, origemAtualizadoEm:item.atualizadoEm });
-      }
-      estado.registros.push(...novos);
-      return resumo;
+      const plano = classificarTotais(documento, estado, instalacao, relogio(), transferencia);
+      if (plano.assinatura !== esperado.assinatura)
+        throw new Error('O histórico mudou após a prévia. Confira novamente antes de importar.');
+      aplicarTotais(estado, plano);
+      return plano.resumo;
     }, null, { backup:true });
   }
   return { registrar, adicionarLinkManual, responsavel, removerDaSelecao, cadastrarResponsavel, editarResponsavel, removerResponsavel, definirUrl, pendentesRecuperaveis,

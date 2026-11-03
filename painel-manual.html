@@ -214,7 +214,7 @@ footer { color: #91a79b; font-size: 13px; line-height: 1.65; padding: 22px 12px 
     <section data-config-secao="geral" hidden><h3>Geral</h3><label class="config-check"><input id="config-logs" type="checkbox"> Registrar mensagens detalhadas desta sessão no painel de Diagnósticos</label><label class="config-check"><input id="config-confirmacoes" type="checkbox"> Confirmar antes de iniciar Atualizar Matérias</label><p>Versão do AutoXS: <strong id="config-versao">—</strong></p></section>
     <section data-config-secao="atualizador" hidden><h3>Atualizador de Matérias</h3><p>Modo padrão: Visível. Modo Discreto disponível na escolha da página.</p><p>O AutoXS confere chapéu e foto antes do envio automático. Trabalha somente na página escolhida e para antes da matéria de referência Brasil x Japão (14/10/2025).</p><p>Limites, paginação e regras editoriais são apenas informativos nesta central.</p></section>
     <section data-config-secao="downloads" hidden><h3>Downloads e Transcrições</h3><label>Destino dos vídeos<select id="config-destino"><option value="downloads">Pasta Downloads do Windows</option><option value="personalizado">Pasta escolhida</option></select></label><div class="config-pasta"><button id="config-escolher-pasta" type="button">Escolher pasta</button><span id="config-pasta-atual">Downloads do Windows</span></div><p>A transcrição continua usando o destino e o formato atuais do módulo. Esta preferência altera somente onde os vídeos são salvos.</p></section>
-    <section data-config-secao="dados" hidden><h3>Dados e Sincronização</h3><p>A transferência manual inclui somente registros de hoje, no fuso de Maceió. O histórico local conserva hoje e os sete dias anteriores.</p><div class="config-pasta"><button id="dados-importar" type="button">Importar dados</button><button id="dados-exportar" type="button">Exportar dados</button></div><input id="dados-arquivo" type="file" accept=".json,application/json" hidden><p id="dados-estado" role="status" aria-live="polite"></p><div id="dados-previa" hidden><h4>Prévia da importação</h4><p id="dados-resumo"></p><ul id="dados-titulos"></ul><p>Registros ambíguos ou de outros dias não serão importados. Atualizações de status do mesmo registro importado são aplicadas quando não houve edição local. Os responsáveis locais não são transferidos.</p><div class="config-pasta"><button id="dados-confirmar" type="button">Confirmar importação</button><button id="dados-cancelar" type="button">Cancelar</button></div></div><div class="config-futuro"><strong>Google Sheets</strong><p>Ainda não configurado. Nenhuma sincronização automática é executada.</p></div></section>
+    <section data-config-secao="dados" hidden><h3>Dados e Sincronização</h3><p>A transferência manual inclui somente os seis totais e os links de hoje, no fuso de Maceió. O histórico local conserva hoje e os sete dias anteriores. Arquivos exportados anteriormente também são aceitos.</p><div class="config-pasta"><button id="dados-importar" type="button">Importar dados</button><button id="dados-exportar" type="button">Exportar dados</button></div><input id="dados-arquivo" type="file" accept=".json,application/json" hidden><p id="dados-estado" role="status" aria-live="polite"></p><div id="dados-previa" hidden><h4>Prévia da importação</h4><p id="dados-origem"></p><ul id="dados-numeros"></ul><p id="dados-resumo"></p><p id="dados-links-rotulo" hidden>Links que serão guardados:</p><ul id="dados-titulos"></ul><p>Totais repetidos e registros de outros dias não serão somados. Links ambíguos não serão importados. Os responsáveis locais não são transferidos.</p><div class="config-pasta"><button id="dados-confirmar" type="button" disabled>Confirmar importação</button><button id="dados-cancelar" type="button">Cancelar</button></div></div><div class="config-futuro"><strong>Supabase</strong><p>Ainda não configurado. Nenhuma sincronização automática é executada.</p></div></section>
     <section data-config-secao="diagnosticos" hidden><h3>Diagnósticos</h3><p id="config-info-tecnica"></p><p>Mensagens desta sessão. Os logs do terminal continuam disponíveis no terminal do AutoXS.</p><pre id="config-registros">Nenhuma mensagem registrada nesta sessão.</pre></section>
   </div>
   <footer class="config-rodape"><span id="config-estado" role="status" aria-live="polite"></span><button id="restaurar-configuracoes" type="button">Restaurar padrões</button></footer>
@@ -228,6 +228,40 @@ footer { color: #91a79b; font-size: 13px; line-height: 1.65; padding: 22px 12px 
     <p class="recado">A escolha não reserva as matérias. No modo normal, o Chrome aparece para você acompanhar e revisar a atualização.</p>
   </div>
 </dialog>
+<dialog id="confirmar-acao" class="materia-dialog" aria-labelledby="titulo-confirmar">
+  <header><h2 id="titulo-confirmar">Confirmar</h2><button id="confirmar-nao" class="secundario fechar" type="button" aria-label="Cancelar">×</button></header>
+  <div class="miolo">
+    <p id="texto-confirmar" class="explicacao"></p>
+    <div class="acoes"><button id="confirmar-sim" type="button">Confirmar</button><button id="confirmar-cancelar" class="secundario" type="button">Cancelar</button></div>
+  </div>
+</dialog>
+<script>
+// O painel roda no Chrome controlado pelo Playwright, que descarta window.confirm
+// sem mostrar nada e devolve false. Toda confirmação passa por este diálogo.
+window.confirmarAutoXS = texto => new Promise(resolve => {
+  const dialogo = document.querySelector('#confirmar-acao');
+  const sim = document.querySelector('#confirmar-sim');
+  const naos = [document.querySelector('#confirmar-nao'), document.querySelector('#confirmar-cancelar')];
+  document.querySelector('#texto-confirmar').textContent = texto;
+  let respondido = false;
+  const responder = valor => {
+    if (respondido) return;
+    respondido = true;
+    sim.removeEventListener('click', aoSim);
+    for (const botao of naos) botao.removeEventListener('click', aoNao);
+    dialogo.removeEventListener('close', aoFechar);
+    if (dialogo.open) dialogo.close();
+    resolve(valor);
+  };
+  const aoSim = () => responder(true);
+  const aoNao = () => responder(false);
+  const aoFechar = () => responder(false);
+  sim.addEventListener('click', aoSim);
+  for (const botao of naos) botao.addEventListener('click', aoNao);
+  dialogo.addEventListener('close', aoFechar);
+  dialogo.showModal();
+});
+</script>
 <script src="divisor-paineis.js"></script>
 <script>
 const botao = document.querySelector('#atualizar');
@@ -295,10 +329,10 @@ botao.addEventListener('click', () => {
   escolhaPagina.showModal();
 });
 document.querySelector('#cancelar-pagina').addEventListener('click', () => escolhaPagina.close());
-escolhaPagina.querySelectorAll('[data-pagina]').forEach(b => b.addEventListener('click', () => {
+escolhaPagina.querySelectorAll('[data-pagina]').forEach(b => b.addEventListener('click', async () => {
   const modo = document.querySelector('#atualizacao-discreta').checked ? 'discreto' : 'visivel';
   escolhaPagina.close();
-  if (window.confirmarInicioAtualizacao?.(Number(b.dataset.pagina)) !== false)
+  if ((await window.confirmarInicioAtualizacao?.(Number(b.dataset.pagina))) !== false)
     void atualizarPagina(Number(b.dataset.pagina), modo);
 }));
 window.exibirProgresso = mensagem => {

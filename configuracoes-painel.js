@@ -65,8 +65,8 @@
     registrar(mensagem);
     return exibirProgressoOriginal(mensagem);
   };
-  window.confirmarInicioAtualizacao = pagina =>
-    !preferencias.confirmacoes || confirm(`Iniciar a atualização da página ${pagina}?`);
+  window.confirmarInicioAtualizacao = async pagina =>
+    !preferencias.confirmacoes || await window.confirmarAutoXS(`Iniciar a atualização da página ${pagina}?`);
 
   $('#abrir-configuracoes').addEventListener('click', () => {
     informar('');
@@ -96,7 +96,7 @@
     } catch (erro) { aplicar(); informar(erro.message, true); }
   });
   $('#restaurar-configuracoes').addEventListener('click', async () => {
-    if (!confirm('Restaurar as preferências padrão deste computador?')) return;
+    if (!await window.confirmarAutoXS('Restaurar as preferências padrão deste computador?')) return;
     await fila;
     try {
       const resposta = await operacao({ acao:'restaurar' });

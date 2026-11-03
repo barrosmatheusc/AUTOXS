@@ -78,7 +78,7 @@ async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao 
         if (typeof pedido.conteudo !== 'string' || pedido.conteudo.length > 5_000_000)
           throw new Error('Escolha um JSON de até 5 MB.');
         const documento = JSON.parse(pedido.conteudo);
-        const previa = await historico.preverImportacao(documento);
+        const previa = await historico.preverImportacao(documento, await identificarInstalacao());
         const token = randomUUID();
         previasImportacao.set(token, { documento, previa, criadoEm:Date.now() });
         return { ok:true, token, previa };
@@ -87,7 +87,7 @@ async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao 
         const entrada = previasImportacao.get(pedido.token);
         if (!entrada || Date.now() - entrada.criadoEm > 10 * 60 * 1000)
           throw new Error('A prévia expirou. Escolha o arquivo novamente.');
-        const resultado = await historico.importarDadosHoje(entrada.documento, entrada.previa);
+        const resultado = await historico.importarDadosHoje(entrada.documento, entrada.previa, await identificarInstalacao());
         previasImportacao.delete(pedido.token);
         return { ok:true, resultado };
       }

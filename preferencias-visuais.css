@@ -44,7 +44,12 @@ html[data-tamanho="ampliado"] { zoom: 1.12; }
 #config-registros { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: #101d17; border: 1px solid #456353; border-radius: 8px; font-size: 12px; }
 #configuracoes .config-futuro { margin-top: 20px; padding: 12px; border: 1px dashed #668c77; border-radius: 9px; }
 #dados-previa { margin-top: 14px; padding: 12px; border: 1px solid #668c77; border-radius: 9px; }
+#dados-estado { min-height: 2.5em; padding: 8px 10px; border: 1px solid #456353;
+  border-radius: 8px; background: #101d17; overflow-wrap: anywhere; }
 #dados-titulos { max-height: 130px; overflow-y: auto; padding-left: 20px; font-size: 13px; }
+#dados-origem { margin: 0 0 9px; font-weight: 600; }
+#dados-numeros { margin: 0 0 10px; padding-left: 20px; font-size: 13px; line-height: 1.6; }
+#dados-links-rotulo { margin: 4px 0; font-size: 13px; }
 
 html[data-tema="claro"] { color-scheme: light; background: #f3f7f4; color: #183027; }
 html[data-tema="claro"] body { background: radial-gradient(ellipse at 20% 0%, #e4f3e9 0%, transparent 55%), #f3f7f4; color: #183027; }

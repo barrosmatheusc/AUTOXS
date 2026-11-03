@@ -29,6 +29,7 @@ async function salvarExportacao(documento, escolher = escolherDestinoWindows) {
     if (erro.code === 'EEXIST') throw new Error('Esse arquivo já existe. Escolha outro nome para não sobrescrever uma exportação anterior.');
     throw erro;
   }
-  return { cancelado:false, destino, registros:documento.registros.length };
+  return { cancelado:false, destino, registros:documento.registros?.length || 0,
+    estatisticas:documento.estatisticas?.length || 0, links:documento.links?.length || 0 };
 }
 module.exports = { salvarExportacao, escolherDestinoWindows };

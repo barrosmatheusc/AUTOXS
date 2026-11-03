@@ -109,7 +109,7 @@ test('painel sem integração mostra configurações e permite prévia de dados'
     const resposta = await painel.evaluate(conteudo =>
       window.dadosAutoXS({ acao:'prever', conteudo:JSON.stringify(conteudo) }), documento);
     assert.equal(resposta.ok, true);
-    assert.equal(resposta.previa.novos, 0);
+    assert.equal(resposta.previa.novosTotais, 0);
   } finally {
     await contexto.close(); await browser.close();
     fs.rmSync(pasta, { recursive:true, force:true });
