@@ -18,6 +18,12 @@ button:hover:not(:disabled){background:#c2fbdc}button:disabled{opacity:.55;curso
 .secundario{background:#263d34;color:#d7f6e5;border:1px solid #719682}.acoes{display:flex;gap:10px;flex-wrap:wrap;margin-top:22px}.acoes button{flex:1 1 150px}
 .aviso{min-height:24px;color:#ffd28b;line-height:1.4;margin:14px 0 0}.erro{color:#ffaaa5}
 .previa{text-align:center}.previa h2{text-align:left}.quadro{width:min(100%,540px);margin:auto;position:relative}
+.ultimas{background:#1b2824;border:1px solid #35473e;border-radius:20px;padding:20px 22px;margin-bottom:24px}
+.ultimas-cabecalho{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.ultimas-cabecalho h2{margin:0}
+.lista-ultimas{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr));gap:12px;margin-top:16px}
+.materia-recente{background:#14231c;border:1px solid #456353;border-radius:12px;padding:14px;min-width:0;display:flex;flex-direction:column;gap:9px}
+.materia-recente h3{font-size:16px;line-height:1.4;margin:0;overflow-wrap:anywhere}.materia-recente p{margin:0;color:#bdcec3;font-size:13px}.materia-recente button{align-self:flex-start;margin-top:auto}
+.materia-recente[data-selecionada="true"]{border-color:#a2edc5}.estado-ultimas{color:#bdcec3;min-height:22px;margin:12px 0 0}.estado-ultimas.erro{color:#ffaaa5}
 canvas{display:block;width:100%;height:auto;aspect-ratio:4/5;background:#344239;cursor:grab;touch-action:none;box-shadow:0 20px 40px #0005}
 canvas.arrastando{cursor:grabbing}.legenda{font-size:13px;color:#bdcec3;margin:12px auto 0;max-width:540px}
 @media(max-width:850px){.editor{grid-template-columns:1fr}.controles,.previa{padding:18px}}
@@ -25,7 +31,12 @@ canvas.arrastando{cursor:grabbing}.legenda{font-size:13px;color:#bdcec3;margin:1
 </head>
 <body>
 <main>
-<header><h1>Gerador de Artes</h1><p>Tribuna do Sertão · Fotografia e textos manuais · 1080 × 1350 pixels</p></header>
+<header><h1>Gerador de Artes</h1><p>Tribuna do Sertão · Fotografia e textos editáveis · 1080 × 1350 pixels</p></header>
+<section class="ultimas" aria-labelledby="titulo-ultimas">
+  <div class="ultimas-cabecalho"><h2 id="titulo-ultimas">Últimas matérias publicadas</h2><button id="atualizar-ultimas" class="secundario" type="button">Atualizar lista</button></div>
+  <p id="estado-ultimas" class="estado-ultimas" role="status" aria-live="polite">Carregando últimas matérias...</p>
+  <div id="lista-ultimas" class="lista-ultimas"></div>
+</section>
 <div class="editor">
   <section class="controles" aria-labelledby="titulo-edicao">
     <h2 id="titulo-edicao">Editar a arte</h2>
@@ -33,7 +44,7 @@ canvas.arrastando{cursor:grabbing}.legenda{font-size:13px;color:#bdcec3;margin:1
     <label><span>Título</span><textarea id="titulo" maxlength="420" placeholder="Digite o título da matéria"></textarea></label>
     <label><span>Fotografia</span><input id="foto" type="file" accept="image/jpeg,image/png,image/webp"></label>
     <p class="ajuda">Arraste a foto na prévia para ajustar o corte. O arquivo original não será modificado.</p>
-    <label><span>Zoom da foto</span><input id="zoom" type="range" min="1" max="2.5" step="0.01" value="1"></label>
+    <label><span>Zoom da foto: <output id="zoom-valor" for="zoom">0%</output></span><input id="zoom" type="range" min="-50" max="150" step="1" value="0"></label>
     <label><span>Posição horizontal</span><input id="posicao-x" type="range" min="-100" max="100" step="1" value="0"></label>
     <label><span>Posição vertical</span><input id="posicao-y" type="range" min="-100" max="100" step="1" value="0"></label>
     <div class="acoes"><button id="restaurar" class="secundario" type="button">Restaurar enquadramento</button><button id="exportar" type="button" disabled>Exportar PNG</button></div>
@@ -46,5 +57,6 @@ canvas.arrastando{cursor:grabbing}.legenda{font-size:13px;color:#bdcec3;margin:1
 </div>
 </main>
 <script src="gerador-artes.js"></script>
+<script src="gerador-artes-ultimas.js"></script>
 </body>
 </html>

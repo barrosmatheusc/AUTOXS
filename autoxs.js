@@ -17,16 +17,20 @@ const { instalarSugestoesChapeuCMS } = require('./sugestoes-chapeu-cms');
 const { validarRequisitosDaMateria, instalarProtecaoEnvioCMS } = require('./requisitos-materia');
 const { prepararImagensAgenciaBrasil, analisarImagensAgenciaBrasil, extrairHtmlRequisicao } = require('./agencia-brasil-imagens');
 const { lerCategoriaAtual, podeGerarImagemRJ, gerarImagemRJ, gerarImagemPorSolicitacao, imagemEmGeracao } = require('./imagem-rj');
+const { carregarIntegracaoLocal } = require('./integracao-local');
+const integracaoLocal = carregarIntegracaoLocal();
+const filaHermes = integracaoLocal?.filaHermes;
+const conferirCandidata = integracaoLocal?.conferirCandidata;
 
 const TITULO_LIMITE = 'Quanto foi o jogo Brasil x Japão hoje? Veja resultado dos gols';
-const LIMITE_PAGINA = 25;
+const DATA_LIMITE = '14/10/2025';
 const URL_NEWS = 'https://redacao.tribunaweb.com.br/news';
 // O CMS pode apresentar data e horário juntos: 24/09/202617:32.
 // A coleta e a conferência do lote devem aceitar o mesmo formato.
 const PADRAO_DATA = /\b(\d{2})\/(\d{2})\/(\d{4})(?:\s*(\d{2}):(\d{2}))?\b/;
 const categoriasCorrigidas = new WeakMap();
 
-// A data é apenas informativa; o limite da fila é a matéria de referência.
+// A data confirma a matéria de referência; não filtra as demais matérias.
 function converterData(texto) {
   const partes = String(texto).match(PADRAO_DATA);
   if (!partes) return null;
@@ -37,16 +41,22 @@ function converterData(texto) {
   return data;
 }
 
-function ehMateriaLimite(titulo) {
+function ehMateriaLimite(titulo, dataTexto = '') {
   const simplificar = valor => normalizar(valor).replace(/×/g, 'x')
     .replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-  return simplificar(titulo).includes(simplificar(TITULO_LIMITE));
+  if (!simplificar(titulo).includes(simplificar(TITULO_LIMITE))) return false;
+  const data = String(dataTexto).match(PADRAO_DATA)?.[0].slice(0, 10);
+  // Se a data não estiver legível, o título confirmado ainda protege o limite.
+  return !data || data === DATA_LIMITE;
 }
 
 async function coletarMaterias(page, estado = {}) {
   // O lote é somente a página atualmente filtrada. A referência e tudo
   // abaixo dela ficam fora da fila, inclusive quando não têm link de edição.
   estado.limiteEncontrado = false;
+  const diagnostico = { linhas:0, visiveis:0, linksUnicos:0, elegiveis:0,
+    semLink:0, linksAmbiguos:0, foraDoCMS:0, repetidas:0 };
+  estado.diagnostico = diagnostico;
   let linhas;
   for (const seletor of ['tr', '[role="row"]', '.list-group-item', '.card', '.row']) {
     const candidatos = page.locator(seletor);
@@ -59,31 +69,49 @@ async function coletarMaterias(page, estado = {}) {
   const materias = [];
   const vistas = new Set();
   const quantidade = await linhas.count();
+  diagnostico.linhas = quantidade;
   for (let i = 0; i < quantidade; i++) {
     const linha = linhas.nth(i);
     if (!await linha.isVisible()) continue;
+    diagnostico.visiveis++;
     const texto = await linha.innerText();
     const celulas = linha.locator('td');
     const titulo = await celulas.count() > 7
       ? (await celulas.nth(7).innerText()).trim()
       : texto.replace(/\s+/g, ' ').trim();
-    if (ehMateriaLimite(titulo)) {
+    const dataTexto = texto.match(PADRAO_DATA)?.[0];
+    if (ehMateriaLimite(titulo, dataTexto)) {
       estado.limiteEncontrado = true;
       break;
     }
-    if (materias.length >= LIMITE_PAGINA) continue;
-    const links = linha.locator('a');
-    const enderecos = await links.evaluateAll(elementos => elementos
-      .filter(a => /editar/i.test(`${a.textContent} ${a.title} ${a.getAttribute('aria-label') || ''}`) || /edit/i.test(a.getAttribute('href') || ''))
+    // Na tabela do CMS, somente a coluna Ações contém o comando de edição.
+    // Outros links da linha podem incluir "edit" e não pertencem à matéria.
+    const acoes = await celulas.count() > 1 ? celulas.nth(1) : linha;
+    const enderecos = await acoes.locator('a[href]').evaluateAll(elementos => elementos
       .map(a => a.getAttribute('href')).filter(Boolean));
-    const urls = [...new Set(enderecos.map(href => new URL(href, page.url()).href))];
-    if (urls.length !== 1) continue;
+    const urls = [...new Set(enderecos.flatMap(href => {
+      try {
+        const destino = new URL(href, page.url());
+        return /^\/news\/(?:edit\/\d+|\d+\/edit)\/?$/i.test(destino.pathname)
+          ? [destino.href] : [];
+      }
+      catch { return []; }
+    }))];
+    if (urls.length !== 1) {
+      diagnostico[urls.length ? 'linksAmbiguos' : 'semLink']++;
+      continue;
+    }
+    diagnostico.linksUnicos++;
     const url = urls[0];
     const destino = new URL(url);
-    if (destino.origin !== new URL(URL_NEWS).origin || !destino.pathname.startsWith('/news/') || vistas.has(url)) continue;
-    const dataTexto = texto.match(PADRAO_DATA)?.[0];
+    if (destino.origin !== new URL(URL_NEWS).origin || !destino.pathname.startsWith('/news/')) {
+      diagnostico.foraDoCMS++;
+      continue;
+    }
+    if (vistas.has(url)) { diagnostico.repetidas++; continue; }
     vistas.add(url);
     materias.push({ url, data: dataTexto, titulo });
+    diagnostico.elegiveis++;
   }
   return materias;
 }
@@ -125,6 +153,41 @@ async function abrirPesquisaImagem(aba, titulo = '', opcoes = {}) {
   await mostrarAjudaFotos(aba, dialog, titulo, { subtitulo, gerarImagem: log => gerarImagemPorSolicitacao(aba, verificarImagemDestaque, log) });
   // Não seleciona fotos nem envia a matéria: o usuário revisa os resultados.
   return termo;
+}
+
+// SELEÇÃO DA FOTO — clica na candidata recomendada e confirma pelo próprio CMS.
+// Nunca envia, salva, publica nem fecha a matéria: depois da seleção a aba fica
+// aberta para conferência humana, igual a qualquer pendência manual.
+async function selecionarFotoNoAcervo(aba, candidata = {}, { verificarImagem, localizarModal } = {}) {
+  if (!conferirCandidata) return { ok:false, motivo:'integração local indisponível' };
+  const dialog = localizarModal
+    ? localizarModal(aba)
+    : aba.getByRole('dialog', { name: /Imagem de Destaque/i });
+  if (!await dialog.isVisible().catch(() => false))
+    return { ok:false, motivo:'o acervo não estava aberto' };
+  const referencia = candidata.clicavel || candidata.caminho;
+  if (!referencia) return { ok:false, motivo:'a candidata não guardou referência no acervo' };
+  const conferencia = await dialog.evaluate(conferirCandidata, {
+    caminho:candidata.caminho, clicavel:candidata.clicavel, fonte:candidata.fonte }).catch(() => null);
+  if (!conferencia) return { ok:false, motivo:'não foi possível reler o acervo' };
+  // Correspondência precisa ser inequívoca: nem zero, nem duas.
+  if (conferencia.encontrados !== 1)
+    return { ok:false, motivo:conferencia.encontrados
+      ? `${conferencia.encontrados} fotos com a mesma origem no acervo` : 'a foto recomendada sumiu do acervo' };
+  if (!conferencia.confere) return { ok:false, motivo:'o acervo mudou desde a análise' };
+  const alvo = dialog.locator(referencia);
+  if (await alvo.count() !== 1) return { ok:false, motivo:'referência da foto deixou de ser única' };
+  // Uma tentativa só: nada de clique repetido sem controle.
+  try { await alvo.click({ timeout:10_000 }); }
+  catch (erro) { return { ok:false, motivo:`o clique não foi aceito (${String(erro.message).split('\n')[0]})` }; }
+  // Confirmação pelo comportamento real do CMS, não pelo clique ter funcionado.
+  const fechou = await dialog.waitFor({ state:'hidden', timeout:5000 }).then(() => true, () => false);
+  const imagem = await verificarImagem(aba).catch(() => ({ temImagem:null }));
+  if (imagem?.temImagem === true)
+    return { ok:true, fechou, confirmacao:fechou
+      ? 'acervo fechou e a imagem de destaque apareceu' : 'imagem de destaque apareceu' };
+  return { ok:false, naoConfirmada:true, fechou,
+    motivo:fechou ? 'o acervo fechou, mas a imagem de destaque não apareceu' : 'o CMS não confirmou a foto' };
 }
 
 function localizarCampoChapeu(aba) {
@@ -417,6 +480,7 @@ async function processarLote(materias, operacoes) {
   const abertas = [];
   const geracoesPendentes = [];
   const resumo = { abertas: 0, enviadas: 0, pendentes: 0, erros: 0 };
+  let processadas = 0;
   const tituloCurto = materia => {
     const texto = String(materia.titulo || 'Sem título').replace(/\s+/g, ' ').trim();
     return texto.length > 70 ? `${texto.slice(0, 67)}...` : texto;
@@ -487,9 +551,9 @@ async function processarLote(materias, operacoes) {
     }
   }
   // Duas etapas: todas as abas são abertas antes de qualquer verificação/envio.
-  for (const materia of materias.slice(0, LIMITE_PAGINA)) {
+  for (const materia of materias) {
     if (interrompido()) break;
-    if (ehMateriaLimite(materia.titulo)) break;
+    if (ehMateriaLimite(materia.titulo, materia.data)) break;
     try {
       const aba = await operacoes.abrir(materia);
       abertas.push({ materia, aba });
@@ -500,12 +564,14 @@ async function processarLote(materias, operacoes) {
       await operacoes.log(`Não foi possível abrir: ${tituloCurto(materia)}.`);
     }
   }
+  await operacoes.log(`🌐 Abas abertas: ${resumo.abertas}/${materias.length}`);
   for (const [indice, { materia, aba }] of abertas.entries()) {
     if (interrompido()) break;
     // Retoma apenas entre matérias, sem disputar o foco com a conferência atual.
     await retomarGeracoesProntas();
     if (interrompido()) break;
     await operacoes.log(`\nMatéria ${indice + 1}/${abertas.length} — ${tituloCurto(materia)}`);
+    processadas++;
     let etapa = 'conferir chapéu e foto';
     try {
       if (operacoes.preparar) await operacoes.preparar(aba);
@@ -544,6 +610,8 @@ async function processarLote(materias, operacoes) {
             etapa = 'abrir a pesquisa de foto';
             const termo = await operacoes.pesquisar(aba, materia.titulo);
             await operacoes.log(termo ? `  Pesquisando foto: ${termo}.` : '  Pesquisa de foto aberta. Digite um termo.');
+            // Fase 1 só anota: a análise do Hermes roda depois do lote inteiro.
+            operacoes.registrarPendenciaFoto?.({ url:materia.url, titulo:materia.titulo, termo, aba, materia });
           }
         }
         await operacoes.log('  Aba aberta para preenchimento manual.');
@@ -570,6 +638,7 @@ async function processarLote(materias, operacoes) {
     await operacoes.log(`Aguardando foto e legenda de ${aguardando.length} matéria(s)…`);
     await Promise.race(aguardando.map(tarefa => tarefa.promessa));
   }
+  await operacoes.log(`✅ Matérias processadas: ${processadas}/${abertas.length}`);
   return resumo;
 }
 // Dispara a navegação e mantém a listagem em primeiro plano, como Ctrl+clique.
@@ -687,7 +756,7 @@ async function executar() {
   const janelaAtualizacao = criarGrupoJanelas(context);
   const janelaAdicao = criarGrupoJanelas(context);
   let page = null;
-  console.log(`FLUXO MANUAL — até 25 matérias da página filtrada, antes de: ${TITULO_LIMITE}.`);
+  console.log(`FLUXO MANUAL — matérias da página filtrada, antes de: ${TITULO_LIMITE} (${DATA_LIMITE}).`);
   async function garantirLogin(
     pagina
   ) {
@@ -1015,6 +1084,8 @@ async function executar() {
     }
     const grupoTrabalho = trazerParaFrente ? janelaAtualizacao : contextoTrabalho;
     await progresso('Atualizando a fila…');
+    // Zera a fila do Hermes e avisa o painel de que a fase 1 começou.
+    filaHermes?.iniciarFaseAutoXS();
     if (!await abrirListagem(paginaTrabalho) || !await aplicarFiltro(paginaTrabalho)) {
       throw new Error(discreto
         ? 'Não foi possível acessar a fila no modo discreto. Confira a janela do Chrome pela barra de tarefas, inclusive o login do CMS.'
@@ -1024,6 +1095,7 @@ async function executar() {
     await selecionarPaginaListagem(paginaTrabalho, 1);
     const estadoPrimeira = {};
     let candidatas = await coletarMaterias(paginaTrabalho, estadoPrimeira);
+    let estadoEscolhida = estadoPrimeira;
     if (paginaEscolhida === 2) {
       if (estadoPrimeira.limiteEncontrado) {
         candidatas = [];
@@ -1031,10 +1103,18 @@ async function executar() {
       } else {
         await progresso('Selecionando a página 2…');
         await selecionarPaginaListagem(paginaTrabalho, 2);
-        candidatas = await coletarMaterias(paginaTrabalho);
+        estadoEscolhida = {};
+        candidatas = await coletarMaterias(paginaTrabalho, estadoEscolhida);
       }
     }
+    const diagnostico = estadoEscolhida.diagnostico;
+    console.log(`📋 Linhas encontradas: ${diagnostico.linhas}; visíveis: ${diagnostico.visiveis}; ` +
+      `links únicos: ${diagnostico.linksUnicos}; elegíveis: ${diagnostico.elegiveis}.`);
+    console.log(`⏭️ Ignoradas — sem link: ${diagnostico.semLink}; links ambíguos: ${diagnostico.linksAmbiguos}; ` +
+      `fora do CMS: ${diagnostico.foraDoCMS}; repetidas: ${diagnostico.repetidas}; ` +
+      `referência encontrada: ${estadoEscolhida.limiteEncontrado ? 'SIM' : 'NÃO'}.`);
     const materias = candidatas.filter(m => !enviadas.has(m.url));
+    console.log(`🗂️ Links de edição para abrir: ${materias.length}; já enviadas nesta sessão: ${candidatas.length - materias.length}.`);
     await progresso(`${materias.length} matérias elegíveis na página ${paginaEscolhida}.`);
     const resumo = await processarLote(materias, {
       abrir: async materia => {
@@ -1081,14 +1161,44 @@ async function executar() {
       },
       motivoPendencia: aba => motivosEnvio.get(aba),
       pesquisar: abrirPesquisaImagem,
+      registrarPendenciaFoto: filaHermes ? pendencia => filaHermes.registrarPendencia(pendencia) : undefined,
       gerarImagem: (aba, log = progresso) => gerarImagemRJ(aba, verificarImagemDestaque, log),
       ativo: () => contextoTrabalho.pages().length > 0,
       log: async mensagem => { console.log(mensagem); await progresso(mensagem); }
     });
     console.log(`\nConferência concluída: ${resumo.enviadas} enviadas; ${resumo.pendentes} para conferir manualmente.`);
+    // FASE 2 — o lote acabou (inclusive as gerações pendentes). Só agora o
+    // Hermes assume, uma matéria por vez, sem disputar o navegador com o lote.
+    if (filaHermes) resumo.hermes = await filaHermes.processar({
+      abrirMateria: async pendencia => {
+        const materia = pendencia.materia || { url:pendencia.url, titulo:pendencia.titulo };
+        const aba = await obterOuAbrirMateria(grupoTrabalho, paginaTrabalho, materia, carregamentos, trazerParaFrente);
+        await prepararAbaMateria(aba, carregamentos, trazerParaFrente);
+        return aba;
+      },
+      // A palavra-chave continua vindo do filtro atual do AutoXS.
+      abrirPesquisa: (aba, titulo) => abrirPesquisaImagem(aba, titulo),
+      localizarModal: aba => aba.getByRole('dialog', { name: /Imagem de Destaque/i }),
+      // SELEÇÃO — clica na foto recomendada e confirma pelo próprio CMS.
+      // Não envia, não salva, não publica e não fecha a matéria: a aba fica
+      // aberta exatamente como ficaria numa pendência manual.
+      selecionarFoto: (aba, candidata) =>
+        selecionarFotoNoAcervo(aba, candidata, { verificarImagem: verificarImagemDestaque }),
+      lerContexto: async aba => {
+        const campoTitulo = aba.locator('input[name="title"], #inp_title').filter({ visible: true });
+        const campoSubtitulo = aba.locator('input[name="subtitle"], textarea[name="subtitle"], #inp_subtitle');
+        const campoChapeu = localizarCampoChapeu(aba);
+        const ler = async campo => await campo.count() === 1 ? (await campo.inputValue()).trim() : '';
+        return { titulo:await ler(campoTitulo), subtitulo:await ler(campoSubtitulo), chapeu:await ler(campoChapeu) };
+      }
+    }).catch(erro => {
+      // A etapa Hermes nunca pode derrubar o resultado do Atualizar Matérias.
+      console.log(`⚠️ Etapa Hermes indisponível: ${erro.message}. O AutoXS concluiu normalmente.`);
+      return { estado:'erro', motivo:erro.message };
+    });
     return resumo;
   }, criarEnvioAoSite(context, garantirLogin, async () => {}, () => janelaAdicao.newPage(), registrarAdicao),
-  janelaAdicao, historico, compartilhamento, buscadorLinks);
+  janelaAdicao, historico, compartilhamento, buscadorLinks, undefined, undefined, integracaoLocal);
   console.log('Clique em Atualizar no painel para iniciar uma rodada.');
 }
 
@@ -1099,7 +1209,7 @@ if (require.main === module) {
   });
 }
 
-module.exports = { verificarImagemDestaque, obterOuAbrirMateria, localizarCampoChapeu, abrirMateriaEmSegundoPlano, prepararAbaMateria, converterData, coletarMaterias, processarLote, lerPendencias, enviarMateria, abrirPesquisaImagem };
+module.exports = { selecionarFotoNoAcervo, verificarImagemDestaque, obterOuAbrirMateria, localizarCampoChapeu, abrirMateriaEmSegundoPlano, prepararAbaMateria, converterData, coletarMaterias, processarLote, lerPendencias, enviarMateria, abrirPesquisaImagem };
   function normalizar(texto) {
 
     return String(texto || '')

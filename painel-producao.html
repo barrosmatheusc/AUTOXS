@@ -45,6 +45,7 @@ input[type="date"]{min-width:180px}.painel{background:#1b2824;border:1px solid #
 @media(max-width:440px){.integrado .grade{grid-template-columns:repeat(2,minmax(0,1fr))}.integrado .resumo-responsaveis{grid-template-columns:1fr}}
 @media(max-width:440px){.form-manual-campos{grid-template-columns:1fr}}
 </style>
+<link rel="stylesheet" href="preferencias-visuais.css">
 </head>
 <body><main>
   <div class="topo"><div><h1>Produção AutoXS</h1><p>Concluídas somente após confirmação do site. Histórico salvo neste computador.</p></div><label>Data <input id="data" type="date"></label></div>
@@ -62,6 +63,12 @@ input[type="date"]{min-width:180px}.painel{background:#1b2824;border:1px solid #
   <section id="relatorio" class="painel" hidden><h2>Relatório diário de links</h2><p>URLs originais de matérias publicadas por Enviar Matérias ou incluídas manualmente. Confira antes de compartilhar.</p><div class="barra"><button id="gerar-relatorio" type="button">Gerar relatório</button><button id="resetar-relatorio" type="button" disabled>Resetar relatório</button><button id="copiar-relatorio" class="principal" type="button" disabled>Copiar relatório inteiro</button></div><div id="confirmar-reset-relatorio" class="confirmar-reset-relatorio" hidden><span>Resetar o relatório gerado? Links, matérias e responsáveis serão preservados.</span><button id="confirmar-reset-relatorio-sim" type="button">Confirmar reset</button><button id="confirmar-reset-relatorio-nao" type="button">Cancelar</button></div><p id="estado-relatorio" role="status">Organize os links e clique em Gerar relatório.</p><div id="texto-relatorio" class="saida"></div><div class="revisao"><h3>Para revisão</h3><div id="pendencias-relatorio"></div></div></section>
 </main>
 <script>
+window.addEventListener('message', evento => {
+  if (evento.source !== window.parent || evento.data?.tipo !== 'autoxs-aparencia') return;
+  const { tema, tamanho } = evento.data;
+  if (['claro', 'escuro'].includes(tema)) document.documentElement.dataset.tema = tema;
+  if (['compacto', 'normal', 'ampliado'].includes(tamanho)) document.documentElement.dataset.tamanho = tamanho;
+});
 const $ = seletor => document.querySelector(seletor);
 const integrado = new URLSearchParams(location.search).get('integrado') === '1';
 if(integrado){

@@ -2,14 +2,20 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { montarTextoCompartilhamento, chaveTitulo, identidadeMateria } = require('./compartilhar-materias');
+const { exportarRegistros, classificarImportacao } = require('./dados-transferencia');
 
-const FUSO = 'America/Sao_Paulo';
+const FUSO = 'America/Maceio';
 const URL_PUBLICA = 'tribunadosertao.com.br';
 const INICIAIS = ['Vladimir', 'Cinara', 'Land', 'Léo'];
 const IDS_REDATORES = new Set(['inicial-1', 'inicial-2', 'inicial-3']);
 const situacoes = new Set(['aguardandoRevisao', 'concluido', 'naoConfirmado', 'erro']);
 const operacoes = new Set(['adicionar', 'atualizar']);
 const RETENCAO_MS = 8 * 24 * 60 * 60 * 1000;
+
+function primeiroDiaAtivo(instante) {
+  const [ano, mes, dia] = dataLocal(instante).split('-').map(Number);
+  return new Date(Date.UTC(ano, mes - 1, dia - 7)).toISOString().slice(0, 10);
+}
 
 function dataLocal(iso) {
   const data = new Date(iso);
@@ -50,7 +56,9 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
   function dentroDoPrazo(item) {
     const referencia = item.situacao === 'concluido' ? item.concluidoEm : item.criadoEm;
     const instante = typeof referencia === 'string' ? Date.parse(referencia) : NaN;
-    return Number.isFinite(instante) && instante >= relogio().getTime() - RETENCAO_MS;
+    if (!Number.isFinite(instante)) return false;
+    const dia = dataLocal(instante);
+    return dia >= primeiroDiaAtivo(relogio()) && dia <= dataLocal(relogio());
   }
   function filtrarExpirados(estado) {
     const quantidade = estado.registros.length;
@@ -59,7 +67,7 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
     estado.registros = estado.registros.filter(item => {
       const referencia = item.situacao === 'concluido' ? item.concluidoEm : item.criadoEm;
       const instante = typeof referencia === 'string' ? Date.parse(referencia) : NaN;
-      return !Number.isFinite(instante) || instante >= relogio().getTime() - RETENCAO_MS;
+      return !Number.isFinite(instante) || dataLocal(instante) >= primeiroDiaAtivo(relogio());
     });
     return quantidade - estado.registros.length;
   }
@@ -83,6 +91,15 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
       }
     } finally { await fs.rm(temporario, { force: true }); }
   }
+  async function criarBackup() {
+    try { await fs.access(arquivo); }
+    catch (erro) { if (erro.code === 'ENOENT') return null; throw erro; }
+    const pasta = path.join(path.dirname(arquivo), 'backups');
+    await fs.mkdir(pasta, { recursive:true });
+    const destino = path.join(pasta, `historico-autoxs-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}.json`);
+    await fs.copyFile(arquivo, destino);
+    return destino;
+  }
   function avisar() {
     for (const ouvinte of ouvintes) {
       try { ouvinte(); } catch { /* O painel não interrompe a gravação do histórico. */ }
@@ -92,7 +109,9 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
     const resultado = fila.then(async () => {
       const estado = await lerArquivo();
       const removidos = filtrarExpirados(estado);
-      if (removidos) {
+      const migrando = estado.retencaoCalendario !== true;
+      if (removidos || migrando) {
+        if (migrando) { await criarBackup(); estado.retencaoCalendario = true; }
         await gravar(estado);
         avisar();
       }
@@ -101,13 +120,16 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
     fila = resultado.catch(() => {});
     return resultado;
   }
-  function alterar(mutacao, sinal = null) {
+  function alterar(mutacao, sinal = null, { backup = false } = {}) {
     const resultado = fila.then(async () => {
       if (sinal?.aborted) throw new Error('Procura cancelada.');
       const estado = await lerArquivo();
+      const migrando = estado.retencaoCalendario !== true;
       filtrarExpirados(estado);
       if (sinal?.aborted) throw new Error('Procura cancelada.');
       const retorno = mutacao(estado);
+      if (backup || migrando) await criarBackup();
+      if (migrando) estado.retencaoCalendario = true;
       await gravar(estado, sinal);
       avisar();
       return retorno;
@@ -401,9 +423,38 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
     if (!item || !item.urlOriginal) throw new Error('Link original ainda não disponível para esta matéria.');
     return montarTextoCompartilhamento({ chapeu: item.chapeu, titulo: item.titulo, subtitulo: item.subtitulo, url: item.urlOriginal });
   }
+  const transferencia = { dataLocal, urlPublica };
+  async function exportarDadosHoje(instalacao) {
+    return exportarRegistros(await ler(), instalacao, relogio(), transferencia);
+  }
+  async function preverImportacao(documento) {
+    const { resumo, novos } = classificarImportacao(documento, await ler(), relogio(), transferencia);
+    return { ...resumo, titulosNovos:novos.slice(0, 20).map(item => item.titulo) };
+  }
+  async function importarDadosHoje(documento, esperado) {
+    if (!esperado || typeof esperado !== 'object') throw new Error('Confira a prévia antes de importar.');
+    return alterar(estado => {
+      const { resumo, novos, atualizacoes } = classificarImportacao(documento, estado, relogio(), transferencia);
+      for (const chave of ['novos', 'atualizados', 'repetidos', 'expirados', 'invalidos', 'ambiguos']) {
+        if (resumo[chave] !== esperado[chave])
+          throw new Error('O histórico mudou após a prévia. Confira novamente antes de importar.');
+      }
+      if (!novos.length && !atualizacoes.length) throw new Error('Não há registros novos ou atualizações seguras para importar.');
+      for (const { existente, item } of atualizacoes) {
+        Object.assign(existente, { situacao:item.situacao, formaConclusao:item.formaConclusao,
+          concluidoEm:item.concluidoEm, titulo:item.titulo || existente.titulo,
+          chapeu:item.chapeu || existente.chapeu, subtitulo:item.subtitulo || existente.subtitulo,
+          urlOriginal:item.urlOriginal || existente.urlOriginal,
+          atualizadoEm:item.atualizadoEm, origemAtualizadoEm:item.atualizadoEm });
+      }
+      estado.registros.push(...novos);
+      return resumo;
+    }, null, { backup:true });
+  }
   return { registrar, adicionarLinkManual, responsavel, removerDaSelecao, cadastrarResponsavel, editarResponsavel, removerResponsavel, definirUrl, pendentesRecuperaveis,
     definirUrlRecuperada, publicadas, definirUrlCompartilhamento, registrarMotivoLink,
-    observar, consultar, materiasPorResponsavel, relatorio, compartilhavel, limparExpirados };
+    observar, consultar, materiasPorResponsavel, relatorio, compartilhavel, limparExpirados,
+    exportarDadosHoje, preverImportacao, importarDadosHoje };
 }
 
 module.exports = { criarHistoricoProducao, urlPublica, dataLocal, RETENCAO_MS };

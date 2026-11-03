@@ -58,13 +58,47 @@ test('abre todo o lote primeiro; envia e fecha somente com chapéu e foto', asyn
   assert.deepEqual(resumo, { abertas: 5, enviadas: 1, pendentes: 4, erros: 0 });
 });
 
-test('aceita matérias anteriores a 2026 até a referência e limita a página a 25 abas', async () => {
+test('aceita matérias anteriores a 2026 e abre todas as elegíveis da página', async () => {
   const lote = [materia('antiga', '31/12/2025 23:59'), ...Array.from({ length: 28 }, (_, i) => materia(i))];
   const estados = Object.fromEntries(lote.map(m => [m.titulo, { temChapeu: false, temImagem: true }]));
   const { operacoes, eventos } = operacoesPara(estados);
   await processarLote(lote, operacoes);
   assert.equal(eventos.some(e => e === 'abrir:Matéria antiga'), true);
-  assert.equal(eventos.filter(e => e.startsWith('abrir:')).length, 25);
+  assert.equal(eventos.filter(e => e.startsWith('abrir:')).length, 29);
+  assert.ok(eventos.indexOf('ler:Matéria antiga') > eventos.lastIndexOf('abrir:Matéria 27'));
+});
+
+test('abre as 25 matérias quando a página tem 25 elegíveis', async () => {
+  const lote=Array.from({length:25},(_,i)=>materia(i+1));
+  const estados=Object.fromEntries(lote.map(item=>[item.titulo,{temChapeu:false,temImagem:true}]));
+  const {operacoes,eventos}=operacoesPara(estados);
+  const resumo=await processarLote(lote,operacoes);
+  assert.equal(resumo.abertas,25);
+  assert.equal(eventos.filter(evento=>evento.startsWith('abrir:')).length,25);
+});
+
+test('referência na linha 19 interrompe a abertura após as 18 anteriores', async () => {
+  const referencia={...materia(19,'14/10/2025 16:11'),titulo:'Quanto foi o jogo Brasil x Japão hoje? Veja resultado dos gols'};
+  const itens=[...Array.from({length:18},(_,i)=>materia(i+1)),referencia,...Array.from({length:6},(_,i)=>materia(i+20))];
+  const estado={};
+  const coletadas=await coletarMaterias(paginaListagem(itens),estado);
+  assert.equal(estado.limiteEncontrado,true);
+  assert.equal(coletadas.length,18);
+  const estados=Object.fromEntries(coletadas.map(item=>[item.titulo,{temChapeu:false,temImagem:true}]));
+  const {operacoes,eventos}=operacoesPara(estados);
+  const resumo=await processarLote(coletadas,operacoes);
+  assert.equal(resumo.abertas,18);
+  assert.equal(eventos.some(evento=>evento.includes(referencia.titulo)),false);
+  assert.equal(eventos.some(evento=>evento==='abrir:Matéria 20'),false);
+});
+
+test('mesmo título em outra data não é confundido com a matéria de referência', async () => {
+  const titulo='Quanto foi o jogo Brasil x Japão hoje? Veja resultado dos gols';
+  const itens=[materia(1),{...materia(2,'15/10/2025 16:11'),titulo},materia(3)];
+  const estado={};
+  const coletadas=await coletarMaterias(paginaListagem(itens),estado);
+  assert.equal(estado.limiteEncontrado,false);
+  assert.equal(coletadas.length,3);
 });
 
 test('envio não confirmado mantém a aba aberta', async () => {
@@ -144,18 +178,36 @@ test('foto gerada sem chapéu continua pendente', async () => {
 });
 
 function paginaListagem(itens) {
-  const linha = item => ({
-    isVisible: async () => item.visivel !== false,
-    innerText: async () => `${item.data} ${item.titulo}`,
-    locator: seletor => seletor === 'a'
-      ? { evaluateAll: async callback => callback((item.links ?? [item.url]).filter(Boolean).map(href => ({ textContent: 'Editar', title: '', getAttribute: nome => nome === 'href' ? href : null }))) }
-      : { count: async () => 8, nth: () => ({ innerText: async () => item.titulo }) }
-  });
+  const linha = item => {
+    const ancoras = links => ({ evaluateAll: async callback => callback(links.filter(Boolean)
+      .map(href => ({ getAttribute: nome => nome === 'href' ? href : null }))) });
+    return {
+      isVisible: async () => item.visivel !== false,
+      innerText: async () => `${item.data} ${item.titulo}`,
+      locator: seletor => seletor === 'td'
+        ? { count: async () => 8, nth: indice => indice === 1
+          ? { locator: () => ancoras(item.links ?? [item.url]) }
+          : { innerText: async () => item.titulo } }
+        : ancoras([...(item.links ?? [item.url]), ...(item.outrosLinks ?? [])])
+    };
+  };
   return {
     url: () => 'https://redacao.tribunaweb.com.br/news',
     locator: () => ({ count: async () => itens.length, nth: i => linha(itens[i]) })
   };
 }
+
+test('coleta usa somente o link de edição da coluna Ações', async () => {
+  const item = { ...materia(1), links: [
+    'https://redacao.tribunaweb.com.br/news/edit/1',
+    'https://redacao.tribunaweb.com.br/news/1/editado',
+    'https://redacao.tribunaweb.com.br/news/delete/1'
+  ], outrosLinks: ['https://redacao.tribunaweb.com.br/news/edit/2'] };
+  const estado = {};
+  const coletadas = await coletarMaterias(paginaListagem([item]), estado);
+  assert.deepEqual(coletadas.map(m => m.url), ['https://redacao.tribunaweb.com.br/news/edit/1']);
+  assert.equal(estado.diagnostico.linksAmbiguos, 0);
+});
 
 test('coleta usa referência, visibilidade e URL válida sem filtrar pela data informativa', async () => {
   const itens = [
@@ -164,15 +216,18 @@ test('coleta usa referência, visibilidade e URL válida sem filtrar pela data i
     { ...materia(6), visivel: false }, { ...materia(7), url: 'https://example.com/news/7/edit' },
     { ...materia(8), links: [materia(8).url, materia(9).url] }
   ];
-  const coletadas = await coletarMaterias(paginaListagem(itens));
+  const estado={};
+  const coletadas = await coletarMaterias(paginaListagem(itens),estado);
   assert.deepEqual(coletadas.map(m => m.titulo), ['Matéria 1', 'Matéria 2', 'Matéria 3', 'Matéria 4']);
   assert.equal(coletadas[3].data, '31/02/2026');
+  assert.deepEqual(estado.diagnostico,{linhas:9,visiveis:8,linksUnicos:6,elegiveis:4,
+    semLink:1,linksAmbiguos:1,foraDoCMS:1,repetidas:1});
 });
 
-test('coleta retorna até 25 matérias elegíveis na página', async () => {
+test('coleta retorna todas as matérias elegíveis da página', async () => {
   const itens = Array.from({ length: 30 }, (_, i) => materia(i));
   const coletadas = await coletarMaterias(paginaListagem(itens));
-  assert.equal(coletadas.length, 25);
+  assert.equal(coletadas.length, 30);
 });
 
 function campoSimulado(campo) {

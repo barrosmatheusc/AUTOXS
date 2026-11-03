@@ -7,6 +7,12 @@ node_modules/
 !.env.example
 sessao.json
 historico-autoxs.json
+backups/
+instalacao-autoxs.id
+preferencias-autoxs.json
+config-local.json
+config-local.json.example
+AUTOXS_DADOS_*.json
 **/canva-config.json
 *.pem
 *.p12
@@ -19,10 +25,28 @@ perfil-atualizacao-discreta/
 perfil-chrome/
 perfil-canva/
 
+# Integração de fotos exclusiva da instalação pessoal
+hermes-*.js
+hermes-candidata-*.png
+test/hermes-*.test.js
+hermes-local/
+hermes-modelos/
+hermes-skills/
+hermes-agents/
+hermes-mcp/
+
 # Saidas locais, historico e experimentos abandonados
 distribuicao/
 experimentos/
 work/
+gerador-videos/dados/
+gerador-videos/.venv/
+# Protótipo local de exportação MP4 ainda não integrado à ferramenta ativa
+gerador-videos-exportacao.js
+gerador-videos/sondar-exportacao.py
+gerador-videos/layouts.json
+gerador-videos/templates/
+test/gerador-videos-exportacao.test.js
 *.log
 *.tmp
 *.bak

@@ -211,7 +211,41 @@ async function lerMateriaEmAbaTemporaria(janela, listagem, entrada, sinal) {
         'main figure img',
         'article figure img'
       ]);
-      return { titulo, chapeu, subtitulo, imagem };
+      const tituloPagina = primeiroTexto([
+        'main header.news-header h1.news-header__title',
+        'header.news-header h1.news-header__title', 'main article h1', 'article h1'
+      ]);
+      const secaoEditorial = cabecalhoEditorial?.closest('section.news-intern-list');
+      const chapeuPublicado = texto(secaoEditorial?.querySelector('h1.news-card__title')) ||
+        primeiroTexto(['main article [rel="category"]', 'article [rel="category"]']);
+      const imagensCabecalho = [...(cabecalhoEditorial?.querySelectorAll('figure picture img, figure > img') || [])];
+      const enderecoSeguro = valor => {
+        try {
+          const destino = new URL(valor, location.href);
+          return destino.protocol === 'https:' && !destino.username && !destino.password ? destino.href : '';
+        } catch { return ''; }
+      };
+      const pareceLogo = (endereco, alt) => /(?:logo|favicon|avatar|icon|icone|banner|agenciabrasil\.svg)/i
+        .test(`${endereco} ${alt}`) || /\.svg(?:[?#]|$)/i.test(endereco) ||
+        /\/img\/share\.png(?:[?#]|$)/i.test(endereco);
+      let imagemDestaque = '';
+      if (imagensCabecalho.length === 1) {
+        const principal = imagensCabecalho[0];
+        const endereco = enderecoSeguro(principal.getAttribute('src') || principal.currentSrc);
+        const largura = Number(principal.getAttribute('width') || principal.naturalWidth);
+        const altura = Number(principal.getAttribute('height') || principal.naturalHeight);
+        if (endereco && !pareceLogo(endereco, principal.alt) && largura >= 400 && altura >= 250)
+          imagemDestaque = endereco;
+      }
+      if (!imagemDestaque && !imagensCabecalho.length && tituloPagina &&
+          textoComparavel(primeiroTexto(['meta[property="og:title"]'])) === textoComparavel(tituloPagina)) {
+        const endereco = enderecoSeguro(primeiroTexto(['meta[property="og:image"]']));
+        const largura = Number(document.querySelector('meta[property="og:image:width"]')?.content);
+        const altura = Number(document.querySelector('meta[property="og:image:height"]')?.content);
+        if (endereco && !pareceLogo(endereco, '') && largura >= 400 && altura >= 250)
+          imagemDestaque = endereco;
+      }
+      return { titulo, chapeu, subtitulo, imagem, tituloPagina, chapeuPublicado, imagemDestaque };
     }, {
       tituloListagem: limparTexto(entrada?.titulo),
       chapeuListagem: limparTexto(entrada?.chapeu)

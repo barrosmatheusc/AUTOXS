@@ -6,6 +6,7 @@
   const campos = {
     chapeu:document.querySelector('#chapeu'), titulo:document.querySelector('#titulo'),
     foto:document.querySelector('#foto'), zoom:document.querySelector('#zoom'),
+    zoomValor:document.querySelector('#zoom-valor'),
     x:document.querySelector('#posicao-x'), y:document.querySelector('#posicao-y'),
     restaurar:document.querySelector('#restaurar'), exportar:document.querySelector('#exportar'),
     aviso:document.querySelector('#aviso')
@@ -41,7 +42,7 @@
   function encaixe() {
     if (!estado.imagem) return null;
     const escala = Math.max(areaFoto.largura / estado.imagem.naturalWidth,
-      areaFoto.altura / estado.imagem.naturalHeight) * Number(campos.zoom.value);
+      areaFoto.altura / estado.imagem.naturalHeight) * (1 + Number(campos.zoom.value) / 100);
     const largura = estado.imagem.naturalWidth * escala;
     const altura = estado.imagem.naturalHeight * escala;
     const alcanceX = (largura - areaFoto.largura) / 2;
@@ -59,6 +60,7 @@
   }
 
   function desenhar() {
+    campos.zoomValor.textContent = `${Number(campos.zoom.value)}%`;
     ctx.clearRect(0, 0, 1080, 1350);
     ctx.fillStyle = '#344239';
     ctx.fillRect(0, 0, 1080, 1350);
@@ -68,6 +70,8 @@
       ctx.beginPath();
       ctx.rect(areaFoto.x, areaFoto.y, areaFoto.largura, areaFoto.altura);
       ctx.clip();
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(areaFoto.x, areaFoto.y, areaFoto.largura, areaFoto.altura);
       ctx.drawImage(estado.imagem, foto.x, foto.y, foto.largura, foto.altura);
       ctx.restore();
     }
@@ -137,6 +141,28 @@
     return Boolean(estado.logo);
   };
 
+  window.importarMateriaGerador = async dados => {
+    campos.chapeu.value = String(dados.chapeu || '');
+    campos.titulo.value = String(dados.titulo || '');
+    campos.foto.value = '';
+    campos.zoom.value = '0'; campos.x.value = '0'; campos.y.value = '0';
+    estado.imagem = null;
+    estado.erroFoto = '';
+    if (dados.fotoDataUrl) {
+      try {
+        const imagem = new Image();
+        imagem.src = dados.fotoDataUrl;
+        await imagem.decode();
+        if (!imagem.naturalWidth || !imagem.naturalHeight) throw new Error('Imagem vazia.');
+        estado.imagem = imagem;
+      } catch {
+        estado.erroFoto = 'Não foi possível carregar a fotografia principal. Escolha a foto manualmente.';
+      }
+    }
+    desenhar();
+    return { fotoCarregada:Boolean(estado.imagem), mensagem:estado.erroFoto || dados.avisoFoto || '' };
+  };
+
   campos.foto.addEventListener('change', async () => {
     const arquivo = campos.foto.files?.[0];
     if (!arquivo) return;
@@ -162,7 +188,7 @@
   for (const campo of [campos.chapeu, campos.titulo, campos.zoom, campos.x, campos.y])
     campo.addEventListener('input', desenhar);
   campos.restaurar.addEventListener('click', () => {
-    campos.zoom.value = '1'; campos.x.value = '0'; campos.y.value = '0'; desenhar();
+    campos.zoom.value = '0'; campos.x.value = '0'; campos.y.value = '0'; desenhar();
   });
 
   canvas.addEventListener('pointerdown', evento => {
@@ -177,9 +203,9 @@
     const foto = encaixe();
     const escala = canvas.width / canvas.getBoundingClientRect().width;
     const limite = valor => Math.max(-100, Math.min(100, valor));
-    if (foto.alcanceX > 0.5) campos.x.value = String(limite(estado.arrasto.posX +
+    if (Math.abs(foto.alcanceX) > 0.5) campos.x.value = String(limite(estado.arrasto.posX +
       (evento.clientX - estado.arrasto.x) * escala * 100 / foto.alcanceX));
-    if (foto.alcanceY > 0.5) campos.y.value = String(limite(estado.arrasto.posY +
+    if (Math.abs(foto.alcanceY) > 0.5) campos.y.value = String(limite(estado.arrasto.posY +
       (evento.clientY - estado.arrasto.y) * escala * 100 / foto.alcanceY));
     desenhar();
   });

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoXS — Download e Transcrição</title>
+<style>
+:root{font-family:"Segoe UI",Arial,sans-serif;color-scheme:dark;color:#edf5f1;background:#101817}
+*{box-sizing:border-box}body{margin:0;padding:28px;background:radial-gradient(ellipse at top left,#23483a,#101817 60%);min-height:100vh}
+main{max-width:1000px;margin:auto}header{margin-bottom:22px}h1{margin:0 0 6px;font-size:30px}header p,.ajuda{color:#bdcec3;line-height:1.5}
+section{background:#1b2824;border:1px solid #35473e;border-radius:20px;padding:22px;margin-bottom:18px;min-width:0}
+h2{font-size:19px;margin:0 0 18px}label{display:block;font-weight:600;margin:0 0 16px}label span{display:block;margin-bottom:8px}
+input[type=url],textarea{width:100%;border:1px solid #668c77;border-radius:10px;padding:12px 14px;background:#0f1b16;color:#fff;font:16px/1.4 "Segoe UI",Arial,sans-serif}
+textarea{min-height:230px;resize:vertical}button{border:0;border-radius:10px;padding:12px 16px;background:#a2edc5;color:#10281b;font:700 15px "Segoe UI",Arial,sans-serif;cursor:pointer}
+button:hover:not(:disabled){background:#c2fbdc}button:disabled{opacity:.55;cursor:not-allowed}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid #fff;outline-offset:3px}
+.secundario{background:#263d34;color:#d7f6e5;border:1px solid #719682}.linha{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px}.linha>*{flex:0 1 auto}
+.pasta{overflow-wrap:anywhere;color:#d7f6e5}.aviso{min-height:24px;color:#ffd28b;line-height:1.5;overflow-wrap:anywhere}.erro{color:#ffaaa5}
+.etapas{padding-left:20px;max-height:190px;overflow:auto;color:#bdcec3;font-size:14px;line-height:1.6}.etapas:empty{display:none}.ajuda{font-size:13px}
+@media(max-width:650px){body{padding:14px}section{padding:16px}}
+</style>
+</head>
+<body>
+<main>
+<header><h1>Download e Transcrição</h1><p>Baixe um vídeo público do Instagram e revise a transcrição antes de entregá-la ao redator.</p></header>
+<section aria-labelledby="titulo-download">
+  <h2 id="titulo-download">Vídeo</h2>
+  <label><span>Link do Instagram</span><input id="url-instagram" type="url" placeholder="https://www.instagram.com/reel/..."></label>
+  <p class="pasta"><strong>Pasta de destino:</strong> <span id="pasta-destino">Localizando Downloads...</span></p>
+  <div class="linha"><button id="escolher-pasta" class="secundario" type="button">Escolher pasta</button><button id="baixar-transcrever" type="button">Baixar e Transcrever</button><button id="cancelar-processamento" class="secundario" type="button" disabled>Cancelar</button></div>
+  <div class="linha"><button id="abrir-pasta-video" class="secundario" type="button" hidden>Abrir pasta do vídeo</button><button id="repetir-transcricao" class="secundario" type="button" hidden>Tentar transcrição novamente</button></div>
+  <p id="status-download" class="aviso" role="status" aria-live="polite"></p>
+  <p id="status-transcricao" class="aviso" role="status" aria-live="polite"></p>
+  <p id="arquivo-salvo" class="pasta" hidden></p>
+  <ol id="etapas-processamento" class="etapas" aria-label="Etapas do processamento" aria-live="polite"></ol>
+  <p class="ajuda">Funciona com publicações públicas acessíveis. Não usa login ou credenciais do Instagram.</p>
+</section>
+<section aria-labelledby="titulo-transcricao">
+  <h2 id="titulo-transcricao">Transcrição para revisão</h2>
+  <textarea id="transcricao" aria-label="Transcrição editável" placeholder="A transcrição aparecerá aqui. Você pode corrigir o texto antes de copiar ou salvar."></textarea>
+  <div class="linha"><button id="copiar-transcricao" class="secundario" type="button">Copiar transcrição</button><button id="salvar-transcricao" class="secundario" type="button">Salvar TXT</button></div>
+</section>
+</main>
+<script src="gerador-videos.js"></script>
+</body>
+</html>

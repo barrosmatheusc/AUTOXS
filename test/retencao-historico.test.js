@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { criarHistoricoProducao, RETENCAO_MS } = require('../historico-producao');
+const { criarHistoricoProducao } = require('../historico-producao');
 
 async function ambiente(executar) {
   const pasta = await fs.mkdtemp(path.join(os.tmpdir(), 'autoxs-retencao-'));
@@ -15,35 +15,34 @@ async function ambiente(executar) {
   } finally { await fs.rm(pasta, { recursive:true, force:true }); }
 }
 
-test('prazo exato de 8 dias usa hora de conclusão e não a última edição', async () => {
+test('oito dias de calendário incluem hoje e sete anteriores no fuso de Maceió', async () => {
   await ambiente(async ({ historico, ajustar }) => {
+    ajustar('2026-10-08T02:59:59.000Z');
     const antigo = await historico.registrar({ operacao:'adicionar', chave:'antigo',
       titulo:'Antigo', situacao:'concluido', formaConclusao:'manual' });
-    ajustar('2026-10-07T15:00:00.000Z');
+    ajustar('2026-10-08T03:00:00.000Z');
     const limite = await historico.registrar({ operacao:'adicionar', chave:'limite',
       titulo:'No limite', situacao:'concluido', formaConclusao:'manual' });
-    ajustar('2026-10-15T14:59:59.999Z');
     await historico.responsavel(antigo.id, 'inicial-1');
-    ajustar('2026-10-15T15:00:00.000Z');
-    assert.equal(RETENCAO_MS, 8 * 24 * 60 * 60 * 1000);
+    ajustar('2026-10-15T03:00:00.000Z');
     assert.deepEqual((await historico.publicadas()).map(item => item.id), [limite.id]);
     assert.equal(await historico.limparExpirados(), 1);
-    assert.equal((await historico.consultar('2026-10-07')).estatisticas.concluidas, 1);
-    ajustar('2026-10-15T15:00:00.001Z');
-    assert.equal((await historico.consultar('2026-10-07')).estatisticas.concluidas, 0);
+    assert.equal((await historico.consultar('2026-10-08')).estatisticas.concluidas, 1);
+    ajustar('2026-10-16T03:00:00.000Z');
+    assert.equal((await historico.consultar('2026-10-08')).estatisticas.concluidas, 0);
     assert.equal(await historico.limparExpirados(), 1);
   });
 });
 
-test('virada de data usa oito períodos de 24 horas, sem apagar conclusão recente', async () => {
+test('virada de data preserva conclusão recente de matéria criada antes', async () => {
   await ambiente(async ({ historico, ajustar }) => {
-    ajustar('2026-10-06T23:59:00.000Z');
+    ajustar('2026-10-07T12:00:00.000Z');
     const rascunho = await historico.registrar({ operacao:'adicionar', chave:'conclusao-recente',
       titulo:'Concluída depois', situacao:'aguardandoRevisao' });
     ajustar('2026-10-14T23:59:00.000Z');
     await historico.registrar({ operacao:'adicionar', chave:'conclusao-recente',
       situacao:'concluido', formaConclusao:'manual' });
-    ajustar('2026-10-15T00:01:00.000Z');
+    ajustar('2026-10-15T03:01:00.000Z');
     assert.equal(await historico.limparExpirados(), 0);
     assert.deepEqual((await historico.publicadas()).map(item => item.id), [rascunho.id]);
     assert.equal((await historico.relatorio('2026-10-14')).semResponsavel.length, 1);
