@@ -1,3 +1,4 @@
+const { chromium } = require('playwright');
 const URL_NEWS = 'https://redacao.tribunaweb.com.br/news';
 const TITULO_REFERENCIA = 'Quanto foi o jogo Brasil x Japão hoje? Veja resultado dos gols';
 const DATA_REFERENCIA = '14/10/2025';
@@ -119,21 +120,28 @@ async function proximaPagina(pagina, assinatura) {
   return true;
 }
 
-function criarContadorPendentesCms(context, { agora = () => new Date() } = {}) {
+function criarContadorPendentesCms(context, { agora = () => new Date(), iniciarNavegador = () => chromium.launch({ headless:true }) } = {}) {
   let estado = { quantidade:null, atualizadoEm:null, desatualizado:true, motivo:'Aguardando consulta ao CMS.' };
   let emAndamento = null, referenciaId = '';
   async function executar() {
-    let pagina;
+    let navegador, contextoConsulta, pagina;
     try {
-      // O painel também é aberto em contextos de teste ou sem login. Neles,
-      // não cria uma segunda guia about:blank para uma consulta impossível.
-      const paginaCmsAberta = context.pages().some(aberta => {
-        try { const url = new URL(aberta.url()); return url.origin === ORIGEM && /^\/news(?:\/|$)/.test(url.pathname); }
-        catch { return false; }
-      });
-      if (!(await context.cookies(URL_NEWS)).length && !paginaCmsAberta)
+      // Copia apenas a sessão do CMS, em memória. O contexto gráfico não
+      // recebe páginas novas nem perde o foco para a consulta periódica.
+      const sessaoAtual = await context.storageState();
+      const hostCms = new URL(URL_NEWS).hostname;
+      const sessaoCms = {
+        cookies:sessaoAtual.cookies.filter(cookie => {
+          const dominio = cookie.domain.replace(/^\./, '');
+          return hostCms === dominio || hostCms.endsWith('.' + dominio);
+        }),
+        origins:sessaoAtual.origins.filter(item => item.origin === ORIGEM)
+      };
+      if (!sessaoCms.cookies.length && !sessaoCms.origins.length)
         throw new Error('Sessão do CMS indisponível. Faça login manualmente no navegador do AutoXS.');
-      pagina = await context.newPage();
+      navegador = await iniciarNavegador();
+      contextoConsulta = await navegador.newContext({ storageState:sessaoCms });
+      pagina = await contextoConsulta.newPage();
       await pagina.goto(URL_NEWS,{waitUntil:'domcontentloaded',timeout:20000});
       if (new URL(pagina.url()).origin !== ORIGEM || /\/login\b/.test(new URL(pagina.url()).pathname))
         throw new Error('Sessão do CMS indisponível. Faça login manualmente no navegador do AutoXS.');
@@ -159,8 +167,13 @@ function criarContadorPendentesCms(context, { agora = () => new Date() } = {}) {
       }
       throw new Error('Matéria de referência Brasil x Japão não encontrada na listagem filtrada.');
     } catch (erro) {
+      console.warn('[PENDÊNCIAS CMS] Consulta silenciosa: ' + (erro.message || erro));
       return { ...estado, desatualizado:true, motivo:erro.message || 'Falha na consulta ao CMS.' };
-    } finally { await pagina?.close().catch(() => {}); }
+    } finally {
+      await pagina?.close().catch(() => {});
+      await contextoConsulta?.close().catch(() => {});
+      await navegador?.close().catch(() => {});
+    }
   }
   function consultar() {
     if (emAndamento) return emAndamento;

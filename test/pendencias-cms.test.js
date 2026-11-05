@@ -44,32 +44,45 @@ test('consulta simulada seleciona 100, usa sessão existente e preserva último 
   const navegador=await chromium.launch({channel:'msedge',headless:true});
   try {
     const context=await navegador.newContext();
+    const principal=await context.newPage();
     await context.addCookies([{name:'cms_session',value:'teste',domain:'redacao.tribunaweb.com.br',path:'/'}]);
+    await context.addCookies([{name:'outro_site',value:'privado',domain:'outro.test',path:'/'}]);
     let visitas=0, falhar=false;
-    await context.route('**/news',async rota => {
-      visitas++;
-      if(falhar) return rota.abort();
-      return rota.fulfill({status:200,contentType:'text/html; charset=utf-8',body:`<!doctype html><html><head><meta charset="utf-8"></head><body>
+    let navegadoresFechados=0;
+    const iniciarNavegador=async()=>({
+      newContext:async opcoes=>{
+        assert.deepEqual(opcoes.storageState.cookies.map(cookie=>cookie.name),['cms_session']);
+        const consulta=await navegador.newContext(opcoes);
+        await consulta.route('**/news',async rota => {
+          visitas++;
+          if(falhar) return rota.abort();
+          return rota.fulfill({status:200,contentType:'text/html; charset=utf-8',body:`<!doctype html><html><head><meta charset="utf-8"></head><body>
         <select id="filterExtra"><option>Todos</option><option value="sem-edicao">Com integração (sem edição)</option></select>
         <button type="button">Filtrar</button>
         <select name="news_length"><option value="25">25</option><option value="100">100</option></select>
         ${tabela([{id:1,titulo:'Primeira',data:'05/11/2026 10:00'},
           {id:2,titulo:'Segunda',data:'05/11/2026 09:00'},
           {id:999,titulo:referencia.titulo,data:'14/10/2025 16:11'}])}</body></html>`});
+        });
+        return consulta;
+      },
+      close:async()=>{navegadoresFechados++;}
     });
-    const contador=criarContadorPendentesCms(context);
+    const contador=criarContadorPendentesCms(context,{iniciarNavegador});
     const [a,b]=await Promise.all([contador.consultar(),contador.consultar()]);
     assert.equal(visitas,1);
     assert.equal(a.quantidade,2,JSON.stringify(a));
     assert.equal(b.quantidade,2);
     assert.equal(a.desatualizado,false);
-    assert.equal(context.pages().length,0,'a guia temporária foi fechada após a consulta');
+    assert.deepEqual(context.pages(),[principal],'a página principal não foi alterada pela consulta');
+    assert.equal(navegadoresFechados,1,'o navegador de consulta foi fechado');
     falhar=true;
     const antigo=await contador.consultar();
     assert.equal(antigo.quantidade,2);
     assert.equal(antigo.desatualizado,true);
     assert.ok(antigo.motivo);
-    assert.equal(context.pages().length,0,'a guia temporária foi fechada após o erro');
+    assert.deepEqual(context.pages(),[principal],'a página principal não foi alterada após erro');
+    assert.equal(navegadoresFechados,2,'o navegador de consulta foi fechado após erro');
     await context.close();
   } finally { await navegador.close(); }
 });
@@ -79,14 +92,21 @@ test('avança para a página seguinte e encerra exatamente antes da referência'
   try {
     const contexto=await navegador.newContext();
     await contexto.addCookies([{name:'cms_session',value:'teste',domain:'redacao.tribunaweb.com.br',path:'/'}]);
-    await contexto.route('**/news',rota => rota.fulfill({status:200,contentType:'text/html; charset=utf-8',body:`<!doctype html><html><head><meta charset="utf-8"></head><body>
+    const iniciarNavegador=async()=>({
+      newContext:async opcoes=>{
+        const consulta=await navegador.newContext(opcoes);
+        await consulta.route('**/news',rota => rota.fulfill({status:200,contentType:'text/html; charset=utf-8',body:`<!doctype html><html><head><meta charset="utf-8"></head><body>
       <select id="filterExtra"><option value="sem-edicao">Com integração (sem edição)</option></select><button>Filtrar</button>
       <select name="news_length"><option value="100">100</option></select>
       <div id="listagem">${tabela([{id:1,titulo:'Primeira',data:'05/11/2026 10:00'}])}</div>
       <nav class="pagination"><button onclick="document.querySelector('#listagem').innerHTML=window.proxima;this.disabled=true">Próxima</button></nav>
       <script>window.proxima=${JSON.stringify(tabela([{id:2,titulo:'Segunda',data:'05/11/2026 09:00'},
         {id:999,titulo:referencia.titulo,data:'14/10/2025 16:11'}]))}</script></body></html>`}));
-    const resultado=await criarContadorPendentesCms(contexto).consultar();
+        return consulta;
+      },
+      close:async()=>{}
+    });
+    const resultado=await criarContadorPendentesCms(contexto,{iniciarNavegador}).consultar();
     assert.equal(resultado.quantidade,2,JSON.stringify(resultado));
     assert.equal(resultado.desatualizado,false);
     assert.equal(contexto.pages().length,0,'não sobra guia após percorrer as páginas');
