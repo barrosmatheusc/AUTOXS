@@ -36,6 +36,12 @@ input[type="date"]{min-width:180px}.painel{background:#1b2824;border:1px solid #
 .integrado .numero strong{font-size:25px}
 .integrado .topo h1{font-size:26px}
 .integrado p{overflow-wrap:anywhere}
+.estatisticas-cabecalho{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.estatisticas-cabecalho h2{margin:0}
+.pendentes-cms{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;min-width:0}
+.pendentes-cms strong{color:#a2edc5;font-size:15px;overflow-wrap:anywhere}
+.pendentes-cms small{color:#92ab9b;font-size:12px;white-space:nowrap}
+.pendentes-cms[data-desatualizado="true"] strong{color:#ffe2a5}
 .form-manual{margin:18px 0;padding:16px;border:1px solid #456353;border-radius:12px;background:#14231b}
 .form-manual h3{margin:0 0 8px}.form-manual-campos{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
 .form-manual label{display:grid;gap:5px;min-width:0;font-size:13px;color:#c2d1c8}.form-manual input,.form-manual select{width:100%}.form-manual .url-manual{grid-column:1/-1}
@@ -55,7 +61,7 @@ input[type="date"]{min-width:180px}.painel{background:#1b2824;border:1px solid #
     <button type="button" data-aba="relatorio">Relatório de Links</button>
   </nav>
   <p id="status" role="status" aria-live="polite"></p>
-  <section id="estatisticas" class="painel"><h2>Estatísticas do dia</h2><div id="numeros" class="grade"></div><p>Registros anteriores ao início deste histórico não são estimados.</p></section>
+  <section id="estatisticas" class="painel"><div class="estatisticas-cabecalho"><h2>Estatísticas do dia</h2><div id="pendentes-cms" class="pendentes-cms" data-desatualizado="true" role="status" aria-live="polite"><strong id="pendentes-cms-texto">Consultando matérias pendentes…</strong><small id="pendentes-cms-periodo">Atualiza a cada 5 min</small></div></div><div id="numeros" class="grade"></div><p>Registros anteriores ao início deste histórico não são estimados.</p></section>
   <section id="materias-responsavel" class="painel"><h2>Matérias por Responsável</h2><div class="resumo-responsaveis"><div><h3>Dia selecionado</h3><div id="contagem-dia"></div><p class="resumo-total">Total: <strong id="total-dia">0</strong> matérias</p></div><div><h3>Histórico disponível (8 dias)</h3><div id="contagem-periodo"></div><p class="resumo-total">Total atribuído: <strong id="total-periodo">0</strong> matérias</p></div></div></section>
   <button id="alternar-links" class="controle-secao" type="button" aria-expanded="false" aria-controls="compartilhaveis">Seleção de Links ▸</button>
   <section id="compartilhaveis" class="painel" hidden><div class="titulo-lista"><h2>Matérias para compartilhar</h2><button id="alternar-materias" class="alternar-materias" type="button" hidden>Expandir selecionadas</button></div><p>Escolha um responsável depois da publicação. O AutoXS procura o link em Links de matérias; se ele continuar pendente, você pode informar a URL original.</p><div class="form-manual"><h3>Adicionar matéria manualmente</h3><div class="form-manual-campos"><label class="url-manual">Link da matéria<input id="manual-url" type="url" placeholder="https://www.tribunadosertao.com.br/..." autocomplete="off"></label></div><div class="acoes"><button id="manual-buscar" type="button">Buscar informações</button><button id="manual-cancelar" type="button" hidden>Cancelar busca</button></div><div id="manual-previa" class="previa-manual" hidden><p>Confira os dados antes de incluir. Campos ausentes podem ser preenchidos manualmente.</p><div class="form-manual-campos"><label class="url-manual">Título<input id="manual-titulo" maxlength="500"></label><label>Chapéu<input id="manual-chapeu" maxlength="120"></label><label>Subtítulo<input id="manual-subtitulo" maxlength="1000"></label></div><p class="url" id="manual-url-previa"></p><div class="acoes"><button id="manual-adicionar" class="principal" type="button">Adicionar à lista</button></div></div></div><div id="lista" class="lista"></div><div class="gestao"><h2 class="gestao-cabecalho"><button id="alternar-responsaveis" class="gestao-alternar" type="button" aria-expanded="false" aria-controls="conteudo-responsaveis"><span>Responsáveis</span><span id="quantidade-responsaveis" class="gestao-quantidade">0 nomes</span><span id="icone-responsaveis" class="gestao-icone" aria-hidden="true">▸</span></button></h2><div id="conteudo-responsaveis" class="gestao-conteudo" hidden><div id="gestao"></div><div class="barra"><input id="novo-responsavel" aria-label="Nome do novo responsável" placeholder="Novo responsável" maxlength="60"><button id="adicionar-responsavel" type="button">Adicionar</button></div></div></div></section>
@@ -87,6 +93,29 @@ const cartoesExpandidos = new Set();
 const nomesNumeros = { concluidas:'Matérias concluídas', atualizacoesAutomaticas:'Atualizações automáticas', finalizadasManualmente:'Finalizadas manualmente', adicionadas:'Adicionadas por Enviar Matérias', aguardandoRevisao:'Aguardando revisão', erros:'Erros e não confirmadas' };
 function recado(texto, erro=false){ $('#status').textContent=texto; $('#status').className=erro?'erro':''; }
 async function chamar(acao, outros={}){const resposta=await window.operacaoProducao({acao,...outros});if(!resposta?.ok){if(acao==='removerResponsavel'&&resposta?.mensagem==='Ação desconhecida.')throw new Error('Reinicie o AutoXS para ativar a remoção de responsáveis.');throw new Error(resposta?.mensagem||'Operação não concluída.');}return resposta.resultado;}
+let ultimoNumeroPendente = null, consultaPendentesEmAndamento = false;
+async function atualizarPendentesCms(){
+  if(consultaPendentesEmAndamento)return;
+  consultaPendentesEmAndamento=true;
+  try{
+    const resultado=await chamar('pendentesCms');
+    if(Number.isInteger(resultado.quantidade))ultimoNumeroPendente=resultado.quantidade;
+    const alvo=$('#pendentes-cms');
+    alvo.dataset.desatualizado=String(Boolean(resultado.desatualizado));
+    $('#pendentes-cms-texto').textContent=ultimoNumeroPendente===null
+      ? 'Contagem de matérias indisponível'
+      : `Faltam ${ultimoNumeroPendente} matérias para atualizar`;
+    $('#pendentes-cms-periodo').textContent=resultado.desatualizado
+      ? 'Informação desatualizada · atualiza a cada 5 min' : 'Atualiza a cada 5 min';
+    alvo.title=resultado.motivo||'';
+  }catch(erro){
+    $('#pendentes-cms').dataset.desatualizado='true';
+    $('#pendentes-cms-texto').textContent=ultimoNumeroPendente===null
+      ? 'Contagem de matérias indisponível' : `Faltam ${ultimoNumeroPendente} matérias para atualizar`;
+    $('#pendentes-cms-periodo').textContent='Informação desatualizada · atualiza a cada 5 min';
+    $('#pendentes-cms').title=erro.message||'Falha na consulta.';
+  }finally{consultaPendentesEmAndamento=false;}
+}
 async function copiar(texto){if(!texto)throw new Error('Não há texto para copiar.');if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(texto);else{const campo=document.createElement('textarea');campo.value=texto;document.body.append(campo);campo.select();const ok=document.execCommand('copy');campo.remove();if(!ok)throw new Error('Não foi possível copiar.');}recado('Copiado.');}
 function botao(nome, executar, classe=''){const el=document.createElement('button');el.type='button';el.textContent=nome;el.className=classe;el.addEventListener('click',async()=>{try{el.disabled=true;await executar();}catch(erro){recado(erro.message,true);}finally{el.disabled=false;}});return el;}
 function formatarData(iso){return new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',dateStyle:'short',timeStyle:'short'}).format(new Date(iso));}
@@ -178,4 +207,6 @@ $('#confirmar-reset-relatorio-nao').addEventListener('click',()=>{$('#confirmar-
 $('#confirmar-reset-relatorio-sim').addEventListener('click',()=>{++versaoRelatorio;relatorioAtual=null;relatorioAssinatura=null;relatorioDesatualizado=false;$('#confirmar-reset-relatorio').hidden=true;desenharRelatorio();recado('Relatório resetado. Links e responsáveis preservados.');});
 $('#copiar-relatorio').addEventListener('click',async()=>{try{if(!relatorioAtual||relatorioDesatualizado)throw new Error('Gere um relatório atualizado antes de copiar.');dados=await chamar('consultar',{data:$('#data').value});if(assinaturaSelecao()!==relatorioAssinatura){relatorioDesatualizado=true;desenharRelatorio();throw new Error('A lista mudou. Gere o relatório novamente.');}await copiar(relatorioAtual.texto);}catch(erro){recado(erro.message,true);}});
 window.mostrarAba('estatisticas');
+void atualizarPendentesCms();
+setInterval(atualizarPendentesCms,5*60*1000);
 </script></body></html>

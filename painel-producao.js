@@ -3,6 +3,7 @@ const { pathToFileURL } = require('node:url');
 const { extrairDadosPublicacao, urlEdicao } = require('./url-publicacao-cms');
 const { chaveTitulo, encontrarLinkPorTitulo } = require('./compartilhar-materias');
 const { buscarInformacoesNaListagem, validarUrlMateria } = require('./links-manuais');
+const { criarContadorPendentesCms } = require('./pendencias-cms');
 
 function dataDaUrl(url) {
   const match = /\/\d{4}\/\d{2}\/\d{2}\//.exec(new URL(url).pathname);
@@ -191,6 +192,7 @@ function criarPainelProducao(context, historico, compartilhamento = null, buscad
   const url = pathToFileURL(path.join(__dirname, 'painel-producao.html')).href;
   const urlIntegrada = url + '?integrado=1';
   const buscador = buscadorExterno || criarBuscadorLinks(historico, compartilhamento);
+  const pendentesCms = criarContadorPendentesCms(context);
   let pagina = null;
   let abrindo = null;
   let recuperando = null;
@@ -207,6 +209,7 @@ function criarPainelProducao(context, historico, compartilhamento = null, buscad
         let resultado;
         switch (entrada.acao) {
           case 'consultar': resultado = await historico.consultar(entrada.data); break;
+          case 'pendentesCms': resultado = await pendentesCms.consultar(); break;
           case 'materiasPorResponsavel': resultado = await historico.materiasPorResponsavel(entrada.data); break;
           case 'relatorio': resultado = await historico.relatorio(entrada.data); break;
           case 'responsavel': resultado = await historico.responsavel(entrada.id, entrada.responsavelId ?? null); break;
