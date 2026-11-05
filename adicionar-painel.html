@@ -4,11 +4,28 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AutoXS — Adicionar matérias</title>
   <link rel="stylesheet" href="adicionar-materias.css">
+  <link rel="stylesheet" href="captura-painel.css">
 </head>
 <body class="painel-adicao">
-  <header class="cabecalho-adicao"><div><h1>Adicionar matérias</h1><p>Até quatro matérias independentes. Cada espaço preenche sua própria aba no site.</p></div><div class="acoes-cabecalho"><button id="adicionar-mais" type="button">Adicionar +1</button><button id="voltar-painel" type="button">Painel inicial</button></div></header>
+  <header class="cabecalho-adicao"><div><h1>Adicionar matérias</h1><p>Até quatro matérias independentes. Cada espaço preenche sua própria aba no site.</p></div><div class="acoes-cabecalho"><button id="abrir-captura" type="button">Central de Captura</button><button id="adicionar-mais" type="button">Adicionar +1</button><button id="voltar-painel" type="button">Painel inicial</button></div></header>
   <main id="grade-materias" class="grade-materias" data-quantidade="1" aria-label="Espaços para adicionar matérias"></main>
   <p id="recado-adicao" role="status"></p>
+  <dialog id="captura-dialogo" class="captura-dialogo" aria-labelledby="captura-titulo">
+    <header><div><h2 id="captura-titulo">Central de Captura</h2><p>Guarde mensagens e fotos, organize e revise antes de usar um quadro.</p></div><button id="fechar-captura" type="button" aria-label="Fechar Central de Captura">×</button></header>
+    <div class="captura-conteudo">
+      <section class="captura-entrada" aria-label="Nova entrada">
+        <h3>Caixa de entrada</h3>
+        <label for="captura-origem">Origem</label><input id="captura-origem" value="WhatsApp — texto colado" maxlength="200">
+        <label for="captura-texto">Mensagens originais</label><textarea id="captura-texto" placeholder="Cole uma matéria completa ou várias mensagens. Cabeçalhos copiados do WhatsApp e títulos explícitos ajudam a separar as notícias."></textarea>
+        <label for="captura-fotos">Fotografias (até 10 por entrada, 12 MB cada)</label><input id="captura-fotos" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple>
+        <div id="captura-previa-arquivos" class="captura-fotos"></div>
+        <div class="captura-acoes"><button id="guardar-captura" type="button">Guardar na caixa</button><button id="organizar-captura" type="button">Organizar mensagens</button></div>
+        <p id="captura-estado" role="status" aria-live="polite"></p>
+        <details><summary>Mensagens recebidas e originais</summary><div id="captura-mensagens"></div></details>
+      </section>
+      <section class="captura-fila" aria-label="Fila de revisão"><h3>Fila de revisão <span id="captura-quantidade"></span></h3><p>O agrupamento é uma proposta. Confira os originais. A aprovação não envia ao CMS. O Gemini permanece opcional no quadro de Adicionar Matérias e envia texto ao serviço externo somente quando você o aciona.</p><div id="captura-rascunhos"></div></section>
+    </div>
+  </dialog>
   <template id="modelo-editor-materia">
     <article class="materia-dialog editor-materia">
       <header class="cabecalho-editor"><h2 data-numero-materia></h2><button id="fechar-espaco" type="button" class="secundario">Fechar quadro</button></header>
@@ -36,5 +53,6 @@
   <script src="identificar-materia.js"></script>
   <script src="sugestoes-chapeu.js"></script>
   <script src="adicionar-materias.js"></script>
+  <script src="captura-painel.js"></script>
 </body>
 </html>

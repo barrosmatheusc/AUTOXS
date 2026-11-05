@@ -9,6 +9,8 @@ sessao.json
 historico-autoxs.json
 backups/
 instalacao-autoxs.id
+hermes-memoria.json
+backups/hermes-memoria-*.json
 preferencias-autoxs.json
 config-local.json
 config-local.json.example

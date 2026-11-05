@@ -189,6 +189,10 @@ function criarEnvioIndividual(context, garantirLogin, prepararFotos, criarAba, a
 }
 
 function criarEnvioAoSite(context, garantirLogin, prepararFotos = async () => {}, criarAba = () => context.newPage(), aoEvento = null) {
+  if (typeof context?.exposeBinding === 'function') {
+    require('./captura-ponte').instalarCaptura(context)
+      .catch(erro => console.warn('[CAPTURA] Não foi possível instalar a caixa de entrada:', erro.message));
+  }
   const espacos = new Map();
   function obterEspaco(numero) {
     if (!Number.isInteger(numero) || numero < 1 || numero > 4) throw new Error('Escolha um dos quatro espaços de adição.');

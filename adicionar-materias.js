@@ -51,6 +51,23 @@
     raiz.querySelector('[data-ref="texto-bruto"]').focus();
   }
   window.exibirProgressoEnvio = (espaco, mensagem) => editoresAbertos.get(espaco)?.progresso(mensagem);
+  // Recebe somente rascunhos aprovados; o envio ao CMS continua em seu botão próprio.
+  window.receberRascunhoCaptura = rascunho => {
+    if (!['aprovado','encaminhado'].includes(rascunho?.status) || !rascunho.campos?.titulo?.trim())
+      return { ok: false, mensagem: 'Aprove e confira o rascunho antes de encaminhar.' };
+    const carregado = [...editoresAbertos.entries()].find(([, editor]) => editor.temCaptura(rascunho.id));
+    if (carregado) return { ok: true, espaco: carregado[0], reutilizada: true };
+    if ([...editoresFechados.values()].some(editor => editor.temCaptura(rascunho.id)))
+      return { ok: false, mensagem: 'Este rascunho já está em um quadro fechado. Reabra o quadro antes de encaminhar novamente.' };
+    let livre = [...editoresAbertos.entries()].find(([, editor]) => editor.vazio());
+    if (!livre && editoresAbertos.size < 4) {
+      adicionarEspaco();
+      livre = [...editoresAbertos.entries()].find(([, editor]) => editor.vazio());
+    }
+    if (!livre) return { ok: false, mensagem: 'Os quatro quadros estão ocupados. O rascunho permanece na fila.' };
+    livre[1].carregarCaptura(rascunho);
+    return { ok: true, espaco: livre[0] };
+  };
   botaoAdicionar.addEventListener('click', adicionarEspaco);
   document.querySelector('#voltar-painel').addEventListener('click', async () => {
     try { await window.voltarAoPainel(); }
@@ -80,6 +97,22 @@
   bruto.value = '';
   function atualizarContinuar() { continuar.hidden = !materiaAtual.campos || bruto.value !== materiaAtual.textoIdentificado; }
   function ocupado() { return enviando || carregandoCategorias || analisandoGemini; }
+  function vazio() { return !ocupado() && !materiaAtual.campos && !bruto.value.trim(); }
+  function temCaptura(id) { return materiaAtual.capturaId === id; }
+  function carregarCaptura(rascunho) {
+    if (!vazio()) throw new Error('Este quadro já contém uma matéria.');
+    const originais = (rascunho.mensagens || []).map(item => item.textoOriginal).join('\n\n');
+    const texto = originais || Object.values(rascunho.campos).join('\n');
+    const foto = rascunho.fotoNome ? `Foto anexada à Central: ${rascunho.fotoNome}. Escolha-a manualmente no CMS.` : '';
+    bruto.value = texto;
+    materiaAtual = { id: crypto.randomUUID(), capturaId:rascunho.id, texto, textoIdentificado: texto,
+      campos: { categoria: '', data: '', titulo: '', chapeu: '', bigode: '', autor: '', imagem: foto,
+        redacao: '', ...rascunho.campos }, origem: {} };
+    for (const chave of Object.keys(materiaAtual.campos)) materiaAtual.origem[chave] = 'Revisado na Central de Captura';
+    abrirRevisao();
+    mostrarEstado('Rascunho da Central carregado. Confira os campos e selecione a foto manualmente no CMS.', 'concluido');
+    raiz.focus();
+  }
   function mostrarEstado(mensagem, estado = 'informacao') {
     estadoIdentificacao.hidden = !mensagem;
     estadoIdentificacao.dataset.estado = estado;
@@ -392,7 +425,7 @@
     if (ocupado() || !guardarEdicoes()) return;
     revisao.hidden = true; atualizarContinuar(); entrada.hidden = false;
   });
-    return { raiz, progresso: exibirProgresso, ocupado, atualizarFechar };
+    return { raiz, progresso: exibirProgresso, ocupado, atualizarFechar, vazio, temCaptura, carregarCaptura };
   }
   adicionarEspaco();
 })();
