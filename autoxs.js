@@ -21,6 +21,9 @@ const { carregarIntegracaoLocal } = require('./integracao-local');
 const integracaoLocal = carregarIntegracaoLocal();
 const filaHermes = integracaoLocal?.filaHermes;
 const conferirCandidata = integracaoLocal?.conferirCandidata;
+// Observação da escolha de foto. Independe de o Hermes estar ligado: o modo
+// observador só anota o que o usuário escolheu, sem disparar nenhuma análise.
+const memoriaVisual = integracaoLocal?.memoriaVisual || null;
 
 const TITULO_LIMITE = 'Quanto foi o jogo Brasil x Japão hoje? Veja resultado dos gols';
 const DATA_LIMITE = '14/10/2025';
@@ -153,6 +156,340 @@ async function abrirPesquisaImagem(aba, titulo = '', opcoes = {}) {
   await mostrarAjudaFotos(aba, dialog, titulo, { subtitulo, gerarImagem: log => gerarImagemPorSolicitacao(aba, verificarImagemDestaque, log) });
   // Não seleciona fotos nem envia a matéria: o usuário revisa os resultados.
   return termo;
+}
+
+// LEITURA DA IMAGEM DE DESTAQUE — estrutural, passiva, sem palpite.
+//
+// Por que não serve varrer document.images: depois de um envio bem-sucedido o
+// CMS navega para /news, a listagem. Ali o formulário não existe mais e a
+// página está cheia de arte do tema. Foi assim que a primeira captura real
+// gravou /assets/images/products/product-2.jpg.
+//
+// A âncora correta é a mesma que o resto do AutoXS já usa para legendar a
+// foto: o cartão .card do formulário que fica ENTRE os dois botões "+" — o da
+// imagem de destaque e o da galeria. Fora desse cartão, nada conta.
+//
+// A função roda dentro da página, é serializada pelo Playwright e por isso
+// precisa ser autocontida. Só lê: não clica, não rola, não altera atributo.
+function lerDestaqueNaPagina(opcoes) {
+  const estiloOk = elemento => {
+    const estilo = getComputedStyle(elemento);
+    return estilo.visibility !== 'hidden' && estilo.display !== 'none';
+  };
+  const visivel = elemento => Boolean(elemento.getClientRects().length) && estiloOk(elemento);
+  const recorte = (valor, tamanho) => String(valor ?? '').trim().slice(0, tamanho || 200);
+
+  // Endereços de arte do tema. Segunda linha de defesa: a primeira é estar
+  // dentro do cartão certo. Serve para o caso de o tema desenhar um
+  // espaço reservado dentro do próprio cartão quando não há foto.
+  const INTERFACE = new RegExp(opcoes.interface, 'i');
+
+  const campo = seletores => {
+    for (const seletor of seletores) {
+      for (const alvo of document.querySelectorAll(seletor)) {
+        if (visivel(alvo) && typeof alvo.value === 'string') return alvo.value;
+      }
+    }
+    return '';
+  };
+  const formulario = document.querySelector('#inp_title, input[name="title"]')?.closest('form');
+  const contexto = {
+    titulo: campo(['input[name="title"]', '#inp_title']),
+    chapeu: campo(['input[name="hat"]', '#inp_hat', '[name*="chapeu" i]',
+      '[id*="chapeu" i]', 'input[placeholder*="chap" i]']),
+    subtitulo: campo(['input[name="subtitle"]', 'textarea[name="subtitle"]', '#inp_subtitle'])
+  };
+  const vazio = motivo => ({ estado:motivo, url:'', cmsId:null, origemId:null,
+    cartoes:0, candidatas:[], ocultos:[], ...contexto });
+
+  // 1. Sem formulário de matéria não há imagem de destaque para ler. É o caso
+  //    da listagem /news, onde a leitura antiga se perdia.
+  if (!formulario) return vazio('semFormulario');
+
+  // 2. O rótulo confirma que estamos na seção certa do formulário.
+  let temRotulo = false;
+  const textos = document.createTreeWalker(formulario, NodeFilter.SHOW_TEXT);
+  while (textos.nextNode()) {
+    const pai = textos.currentNode.parentElement;
+    if (!pai || !visivel(pai) || pai.closest('.modal, [role="dialog"], dialog')) continue;
+    if (/^imagem\s+(?:de\s+)?destaque\s*[:*]?$/i.test(textos.currentNode.textContent.trim())) {
+      temRotulo = true; break;
+    }
+  }
+
+  // 3. Os dois botões "+" delimitam a faixa: destaque acima, galeria abaixo.
+  const rotuloDe = elemento => ((elemento.textContent || '') + ' ' +
+    (elemento.getAttribute('aria-label') || '')).trim();
+  const botoes = Array.from(formulario.querySelectorAll('button, [role="button"]'))
+    .filter(elemento => visivel(elemento) && rotuloDe(elemento) === '+');
+  if (botoes.length < 2) return { ...vazio('semBotoes'), temRotulo };
+  const inicio = botoes[0].getBoundingClientRect();
+  const fim = botoes[1].getBoundingClientRect();
+  if (!(fim.y > inicio.y)) return { ...vazio('faixaInvalida'), temRotulo };
+
+  // 4. O cartão da imagem de destaque — mesmo critério de imagem-rj.js.
+  const cartoes = Array.from(formulario.querySelectorAll('.card')).filter(cartao => {
+    const caixa = cartao.getBoundingClientRect();
+    return visivel(cartao) && !cartao.closest('.modal, [role="dialog"], dialog') &&
+      caixa.y > inicio.y && caixa.y < fim.y && caixa.width >= 100 && cartao.querySelector('img');
+  });
+  if (!cartoes.length) return { ...vazio('semCartao'), temRotulo };
+  // Dois cartões na faixa é ambiguidade: não se adivinha qual é o destaque.
+  if (cartoes.length > 1) return { ...vazio('cartaoAmbiguo'), temRotulo, cartoes:cartoes.length };
+  const cartao = cartoes[0];
+
+  // 5. A fotografia dentro do cartão. Mais de uma carregada também é dúvida.
+  const imagens = Array.from(cartao.querySelectorAll('img')).filter(imagem =>
+    visivel(imagem) && imagem.complete && imagem.naturalWidth > 0);
+  const fontes = [];
+  for (const imagem of imagens) {
+    const fonte = imagem.currentSrc || imagem.getAttribute('src') || '';
+    if (fonte && !fontes.includes(fonte)) fontes.push(fonte);
+  }
+  if (!fontes.length) return { ...vazio('semImagem'), temRotulo, cartoes:1 };
+  if (fontes.length > 1)
+    return { ...vazio('imagemAmbigua'), temRotulo, cartoes:1, candidatas:fontes.map(f => recorte(f, 300)) };
+  const url = fontes[0];
+  if (INTERFACE.test(url))
+    return { ...vazio('interface'), temRotulo, cartoes:1, candidatas:[recorte(url, 300)] };
+
+  // 6. Identificadores que o CMS porventura exponha. São COLETADOS aqui e a
+  //    escolha de qual usar acontece fora da página, onde dá para validar.
+  const ATRIBUTOS = ['data-id', 'data-image-id', 'data-imagem-id', 'data-media-id',
+    'data-midia-id', 'data-attachment-id', 'data-foto-id', 'data-file-id', 'data-url', 'data-src'];
+  const atributos = [];
+  let alvo = cartao.querySelector('img');
+  for (let nivel = 0; alvo && alvo !== formulario && nivel < 6; nivel++, alvo = alvo.parentElement) {
+    for (const nome of ATRIBUTOS) {
+      const valor = alvo.getAttribute && alvo.getAttribute(nome);
+      if (valor) atributos.push({ nome, valor:recorte(valor, 300), onde:alvo.tagName.toLowerCase() });
+    }
+  }
+  // Campos ocultos do formulário que possam guardar o id da mídia. Nome e
+  // valor apenas; nada de token, cookie ou credencial.
+  const SENSIVEL = /token|csrf|senha|password|secret|auth|session|key|hash|nonce/i;
+  const RELACIONADO = /image|imagem|foto|photo|media|midia|destaque|thumb|capa|cover/i;
+  const ocultos = Array.from(formulario.querySelectorAll('input[type="hidden"], input[type="text"]'))
+    .filter(entrada => {
+      const nome = `${entrada.name || ''} ${entrada.id || ''}`;
+      return RELACIONADO.test(nome) && !SENSIVEL.test(nome);
+    })
+    .slice(0, 12)
+    .map(entrada => ({ nome:recorte(entrada.name || entrada.id, 60), valor:recorte(entrada.value, 200) }));
+
+  return { estado:'ok', url, temRotulo, cartoes:1,
+    classeCartao: recorte(cartao.getAttribute('class'), 120),
+    atributos, ocultos, candidatas:[], cmsId:null, origemId:null, ...contexto };
+}
+
+// Escolhe o identificador mais confiável a partir do que a página ofereceu.
+// Nada é inventado: sem evidência numérica inequívoca, devolve null e a
+// identidade da foto continua vindo da URL.
+function escolherIdDaMidia(lida) {
+  const numerico = valor => /^\d{1,15}$/.test(String(valor || '').trim());
+  const diretos = (lida.atributos || [])
+    .filter(item => /id$/i.test(item.nome) && numerico(item.valor))
+    .map(item => ({ valor:String(item.valor).trim(), origem:`atributo:${item.nome}` }));
+  const campos = (lida.ocultos || [])
+    .filter(item => numerico(item.valor))
+    .map(item => ({ valor:String(item.valor).trim(), origem:`campo:${item.nome}` }));
+  const todos = [...diretos, ...campos];
+  if (!todos.length) return { cmsId:null, origemId:null };
+  // Valores divergentes significam que não sabemos qual é o da imagem.
+  const unicos = [...new Set(todos.map(item => item.valor))];
+  if (unicos.length !== 1) return { cmsId:null, origemId:'ambiguo' };
+  return { cmsId:unicos[0], origemId:todos[0].origem };
+}
+
+// Arte do tema que nunca é fotografia de matéria. Não é lista de arquivos
+// específicos: são marcas de diretório e de papel de interface.
+const ARTE_DE_INTERFACE = [
+  '/assets/', '/static/', '/theme/', '/template/', '/dist/', '/build/',
+  'logo', 'avatar', 'icon', 'icone', 'sprite', 'banner', 'placeholder',
+  'no[-_]?image', 'sem[-_]?imagem', 'default[-_]?image', 'product-\\d'
+].join('|');
+
+// Leitura final usada pela memória. Devolve sempre um objeto previsível; em
+// qualquer dúvida o estado explica o motivo e a URL fica vazia.
+async function lerFotoEscolhida(aba) {
+  const vazio = { estado:'erro', quantidade:0, url:'', cmsId:null, origemId:null,
+    titulo:'', chapeu:'', subtitulo:'' };
+  try {
+    const lida = await aba.evaluate(lerDestaqueNaPagina, { interface:ARTE_DE_INTERFACE });
+    const { cmsId, origemId } = lida.estado === 'ok' ? escolherIdDaMidia(lida) : { cmsId:null, origemId:null };
+    return { ...lida, cmsId, origemId,
+      quantidade: lida.estado === 'ok' ? 1 : 0,
+      url: lida.estado === 'ok' ? lida.url : '',
+      titulo: lida.titulo || '', chapeu: lida.chapeu || '', subtitulo: lida.subtitulo || '' };
+  } catch { return vazio; }
+}
+
+const CHAVE_SENTINELA = 'autoxs:destaque';
+// Quanto tempo uma leitura guardada continua valendo. O envio e a
+// confirmação acontecem em segundos; mais que isso é resto de outra tentativa.
+const VALIDADE_SENTINELA_MS = 120_000;
+
+// SENTINELA — a leitura ao vivo perde a corrida com a navegação.
+//
+// Quando o formulário é enviado, o navegador começa a trocar de página e o
+// contexto onde o evaluate rodaria deixa de existir no meio do caminho. A
+// sentinela resolve isso lendo a imagem de destaque DENTRO da página, de forma
+// síncrona, no próprio evento de submit — antes de qualquer navegação — e
+// deixando o resultado no sessionStorage, que sobrevive à troca de página.
+//
+// Continua sendo leitura passiva, e continua sendo PROVISÓRIA: só vira
+// aprendizado depois que o CMS confirmar o salvamento.
+async function instalarSentinelaDestaque(aba) {
+  const codigo = `(() => {
+    if (window.__autoxsSentinelaDestaque) return;
+    window.__autoxsSentinelaDestaque = true;
+    const ler = ${lerDestaqueNaPagina.toString()};
+    const opcoes = ${JSON.stringify({ interface:ARTE_DE_INTERFACE })};
+    const guardar = () => {
+      try {
+        sessionStorage.setItem(${JSON.stringify(CHAVE_SENTINELA)},
+          JSON.stringify({ em:Date.now(), lida:ler(opcoes) }));
+      } catch { /* sessionStorage bloqueado: a leitura ao vivo ainda pode valer */ }
+    };
+    // Fase de captura: roda antes de qualquer handler do próprio CMS.
+    document.addEventListener('submit', guardar, true);
+    window.addEventListener('beforeunload', guardar);
+  })();`;
+  // addInitScript cobre a próxima navegação; o evaluate cobre a página atual.
+  await aba.addInitScript(codigo).catch(() => {});
+  await aba.evaluate(codigo).catch(() => {});
+}
+
+// Lê o que a sentinela guardou. Descarta o que estiver velho ou inutilizável.
+async function lerDestaqueGuardado(aba) {
+  try {
+    const bruto = await aba.evaluate(chave => {
+      try {
+        const valor = sessionStorage.getItem(chave);
+        sessionStorage.removeItem(chave);
+        return valor;
+      } catch { return null; }
+    }, CHAVE_SENTINELA);
+    if (!bruto) return null;
+    const guardado = JSON.parse(bruto);
+    if (!guardado?.lida || Date.now() - guardado.em > VALIDADE_SENTINELA_MS) return null;
+    const { cmsId, origemId } = guardado.lida.estado === 'ok'
+      ? escolherIdDaMidia(guardado.lida) : { cmsId:null, origemId:null };
+    return { ...guardado.lida, cmsId, origemId, viaSentinela:true,
+      url:guardado.lida.estado === 'ok' ? guardado.lida.url : '' };
+  } catch { return null; }
+}
+// Diagnóstico sanitizado da área de destaque, para investigar sem publicar
+// nada. Mostra o que foi encontrado e por que foi (ou não foi) aceito.
+async function diagnosticarImagemDestaque(aba) {
+  try {
+    const lida = await aba.evaluate(lerDestaqueNaPagina, { interface:ARTE_DE_INTERFACE });
+    const { cmsId, origemId } = escolherIdDaMidia(lida);
+    const limpar = valor => {
+      if (!valor) return valor;
+      try {
+        const url = new URL(valor);
+        for (const nome of [...url.searchParams.keys()]) {
+          if (/token|sig|signature|auth|key|expires|session/i.test(nome)) url.searchParams.set(nome, '…');
+        }
+        return url.href;
+      } catch { return valor; }
+    };
+    return { ...lida, cmsId, origemId, url:limpar(lida.url),
+      candidatas:(lida.candidatas || []).map(limpar),
+      atributos:(lida.atributos || []).map(item => ({ ...item, valor:limpar(item.valor) })),
+      // O contexto não interessa ao diagnóstico da imagem e pode ser longo.
+      titulo:undefined, chapeu:undefined, subtitulo:undefined };
+  } catch (erro) { return { estado:'erroNaLeitura', motivo:erro.message }; }
+}
+
+const MOTIVOS_DESTAQUE = {
+  semFormulario:'a página não é o formulário da matéria (provavelmente já navegou para a listagem)',
+  semBotoes:'os dois botões + da imagem e da galeria não foram encontrados',
+  faixaInvalida:'os botões + estão fora da ordem esperada',
+  semCartao:'nenhum cartão de imagem entre os botões',
+  cartaoAmbiguo:'mais de um cartão na área de destaque',
+  semImagem:'o cartão de destaque não tem foto carregada',
+  imagemAmbigua:'mais de uma foto carregada no cartão de destaque',
+  interface:'a imagem encontrada é arte do tema, não fotografia de matéria',
+  erro:'a leitura da página falhou',
+  erroNaLeitura:'a leitura da página falhou'
+};
+
+// Abas de matéria abertas no próprio AutoXS. O Chrome do AutoXS é controlado
+// pelo Playwright por um canal privado (--remote-debugging-pipe), sem porta de
+// rede: nenhum processo externo consegue se anexar a ele. Por isso o
+// diagnóstico roda DENTRO do AutoXS, reaproveitando as abas que já existem.
+// A MESMA regra que o AutoXS usa para decidir que uma aba é o formulário da
+// matéria. Uma definição só: o diagnóstico enxerga exatamente as abas que o
+// resto do programa trata como matéria.
+const ehFormularioMateria = pagina => {
+  try {
+    const url = new URL(pagina.url());
+    return url.origin === new URL(URL_NEWS).origin
+      && /^\/news\/(?:add|edit\/[^/]+)\/?$/.test(url.pathname);
+  } catch { return false; }
+};
+
+function localizarAbasDeMateria(context) {
+  const paginas = typeof context?.pages === 'function' ? context.pages() : [];
+  return paginas.filter(aba => {
+    try {
+      if (typeof aba.isClosed === 'function' && aba.isClosed()) return false;
+      return ehFormularioMateria(aba);
+    } catch { return false; }
+  });
+}
+
+// Diagnóstico somente leitura de todas as abas de matéria abertas. Não clica,
+// não seleciona foto, não salva, não publica, não recarrega e não fecha nada.
+async function diagnosticarDestaqueAberto(context) {
+  const abas = localizarAbasDeMateria(context);
+  if (!abas.length) return { abas:[] };
+  const leituras = await Promise.all(abas.map(async aba => {
+    const lida = await diagnosticarImagemDestaque(aba);
+    const ok = lida.estado === 'ok';
+    return {
+      materia: aba.url(),
+      ...lida,
+      motivo: ok ? null : (MOTIVOS_DESTAQUE[lida.estado] || lida.motivo || 'motivo desconhecido'),
+      confianca: !ok ? 'indeterminada' : (lida.cmsId ? 'exata (id do CMS)' : 'provável (URL)'),
+      chave: !ok ? null : (lida.cmsId ? `cms:${lida.cmsId}` : `url:${lida.url}`)
+    };
+  }));
+  return { abas:leituras };
+}
+
+// Registra a escolha humana depois de o CMS confirmar o salvamento e antes de a
+// aba fechar. Duas imagens de destaque, nenhuma, ou endereço irreconhecível:
+// nada é registrado, porque um palpite errado estraga o aprendizado seguinte.
+// Devolve a gravação em separado para quem chama não precisar esperar o disco.
+// Consolida a escolha humana. Recebe a leitura FEITA ANTES DO ENVIO: depois
+// do envio o CMS navega para a listagem e a página do formulário não existe
+// mais. Sem leitura confiável nada é gravado — perder uma amostra é melhor do
+// que ensinar uma escolha falsa.
+async function registrarEscolhaDeFoto(aba, materia, memoria, registrar = () => {}, lidaAntes = null) {
+  if (!memoria) return null;
+  // Ordem das fontes: a leitura feita no instante do envio; depois o que a
+  // sentinela guardou dentro da página; por último uma leitura agora, que só
+  // funciona se o CMS não tiver navegado. Nenhuma delas boa, nada é gravado.
+  let lida = lidaAntes?.estado === 'ok' ? lidaAntes : null;
+  if (!lida) lida = await lerDestaqueGuardado(aba);
+  if (!lida) lida = lidaAntes || await lerFotoEscolhida(aba).catch(() => null);
+  if (!lida || lida.estado !== 'ok' || !lida.url) {
+    registrar(`  Memória visual: ${MOTIVOS_DESTAQUE[lida.estado] || lida.estado}; escolha não registrada.`);
+    return null;
+  }
+  const entrada = {
+    materiaUrl: materia?.url || (typeof aba?.url === 'function' ? aba.url() : ''),
+    imagemUrl: lida.url,
+    cmsId: lida.cmsId,
+    titulo: lida.titulo || materia?.titulo || '',
+    chapeu: lida.chapeu,
+    subtitulo: lida.subtitulo,
+    origem: 'manual'
+  };
+  return { entrada, gravacao:Promise.resolve(memoria.registrar(entrada)) };
 }
 
 // SELEÇÃO DA FOTO — clica na candidata recomendada e confirma pelo próprio CMS.
@@ -682,12 +1019,6 @@ async function prepararAbaMateria(aba, carregamentos, trazerParaFrente = true) {
 function acompanharFerramentasEditorais(context) {
   const paginasObservadas = new WeakSet();
   const instalacoes = new WeakMap();
-  const ehFormularioMateria = pagina => {
-    try {
-      const url = new URL(pagina.url());
-      return url.origin === new URL(URL_NEWS).origin && /^\/news\/(?:add|edit\/[^/]+)\/?$/.test(url.pathname);
-    } catch { return false; }
-  };
   function instalar(pagina) {
     if (pagina.isClosed() || !ehFormularioMateria(pagina)) return Promise.resolve();
     if (instalacoes.has(pagina)) return instalacoes.get(pagina);
@@ -1066,6 +1397,10 @@ async function executar() {
     return registro;
   }
   // As abas pendentes continuam editáveis entre cliques no painel.
+  // Uma única instância do preenchimento, compartilhada pelo painel e pela
+  // ponte do Cayo: não existe segunda automação do formulário.
+  const envioAoSite = criarEnvioAoSite(context, garantirLogin, async () => {},
+    () => janelaAdicao.newPage(), registrarAdicao);
   await criarPainelManual(context, async (progresso, paginaEscolhida, modo = 'visivel') => {
     if (paginaEscolhida !== 1 && paginaEscolhida !== 2) throw new Error('Escolha Página 1 ou Página 2 antes de atualizar.');
     const discreto = modo === 'discreto';
@@ -1138,11 +1473,23 @@ async function executar() {
       acompanhar: async (aba, materia) => {
         if (acompanhamentos.has(aba) || enviadas.has(materia.url)) return;
         const formulario = localizarCampoChapeu(aba).locator('xpath=ancestor::form[1]');
-        const parar = await acompanharEnvioManual(aba, formulario, async () => {
+        // Instalada antes do envio: é ela que garante a leitura da foto final
+        // mesmo quando o CMS navega para a listagem ao salvar.
+        if (memoriaVisual) await instalarSentinelaDestaque(aba).catch(() => {});
+        const parar = await acompanharEnvioManual(aba, formulario, async provisorio => {
+          // O provisório foi lido ANTES do envio, com o formulário ainda na
+          // tela. Só vira aprendizado aqui, depois de o CMS confirmar. A
+          // gravação segue sozinha para o fechamento da aba não esperar o disco.
+          const escolha = await registrarEscolhaDeFoto(aba, materia, memoriaVisual,
+            mensagem => console.log(mensagem), provisorio).catch(() => null);
+          void escolha?.gravacao?.catch(erro =>
+            console.warn(`⚠️ Memória visual não gravou a escolha: ${erro.message}`));
           await registrarAtualizacao(materia, 'concluido', 'manual');
           enviadas.add(materia.url);
           acompanhamentos.delete(aba);
-        });
+        // Lê a imagem de destaque no instante em que o envio parte. Se o envio
+        // falhar, esta leitura é descartada e nada é aprendido.
+        }, memoriaVisual ? () => lerFotoEscolhida(aba) : null);
         if (parar) acompanhamentos.set(aba, parar);
       },
       ler: async aba => {
@@ -1197,8 +1544,55 @@ async function executar() {
       return { estado:'erro', motivo:erro.message };
     });
     return resumo;
-  }, criarEnvioAoSite(context, garantirLogin, async () => {}, () => janelaAdicao.newPage(), registrarAdicao),
+  }, envioAoSite,
   janelaAdicao, historico, compartilhamento, buscadorLinks, undefined, undefined, integracaoLocal);
+  // Ponte opcional do Cayo: atende pedidos de matéria deixados em arquivo e usa
+  // o MESMO preenchimento do painel. Ausente, o AutoXS roda exatamente igual.
+  let ponteCayo = null;
+  try {
+    const { iniciarPonteCayo } = require('./hermes-cayo-ponte');
+    const { identificarMateria } = require('./identificar-materia');
+    ponteCayo = iniciarPonteCayo({ enviarAoSite:envioAoSite, identificarMateria,
+      // A aba do formulário de adição, para a etapa de foto. Localizada pela
+      // mesma regra que o resto do AutoXS usa, sem abrir aba nova.
+      obterAbaAdicao: async tituloEsperado => {
+        const abas = localizarAbasDeMateria(context)
+          .filter(aba => { try { return new URL(aba.url()).pathname.startsWith('/news/add'); }
+            catch { return false; } });
+        if (!tituloEsperado) return abas[0] || null;
+        const candidatas = [];
+        for (const aba of abas) {
+          const titulo = await aba.locator('#inp_title').inputValue().catch(() => null);
+          if (String(titulo || '').replace(/\s+/g, ' ').trim() === tituloEsperado)
+            candidatas.push(aba);
+        }
+        return candidatas.length === 1 ? candidatas[0] : null;
+      },
+      verificarImagemDestaque,
+      // A sonda recebe o contexto e o login já existentes: nenhuma sessão nova.
+      abrirSonda:(sondar, opcoesSonda) =>
+        sondar(context, { garantirLogin, ...opcoesSonda }) });
+    if (ponteCayo.ativa) console.log('☤ Cayo: pedidos de matéria por mensagem estão sendo atendidos.');
+  } catch (erro) {
+    if (erro.code !== 'MODULE_NOT_FOUND')
+      console.warn(`⚠️ Ponte do Cayo indisponível: ${erro.message}. O AutoXS continuará normalmente.`);
+  }
+  context.on('close', () => { void ponteCayo?.encerrar?.(); });
+  // Ponte da Skill de LINK COMPARTILHÁVEL: independente do Cayo, só consulta a
+  // listagem pública de Últimas reaproveitando o serviço de compartilhamento
+  // que já existe aqui. Sem o arquivo local, o AutoXS roda igual.
+  let ponteDeLinks = null;
+  try {
+    const { iniciarPonteDeLinks } = require('./hermes-links-ponte');
+    ponteDeLinks = iniciarPonteDeLinks({ compartilhamento });
+    if (ponteDeLinks.ativa)
+      console.log('🔗 Links: pedidos de link compartilhável estão sendo atendidos.');
+  } catch (erro) {
+    if (erro.code !== 'MODULE_NOT_FOUND')
+      console.warn(`⚠️ Ponte de links indisponível: ${erro.message}. O AutoXS continuará normalmente.`);
+  }
+  context.on('close', () => { void ponteDeLinks?.encerrar?.(); });
+
   console.log('Clique em Atualizar no painel para iniciar uma rodada.');
 }
 
@@ -1209,7 +1603,10 @@ if (require.main === module) {
   });
 }
 
-module.exports = { selecionarFotoNoAcervo, verificarImagemDestaque, obterOuAbrirMateria, localizarCampoChapeu, abrirMateriaEmSegundoPlano, prepararAbaMateria, converterData, coletarMaterias, processarLote, lerPendencias, enviarMateria, abrirPesquisaImagem };
+module.exports = { lerFotoEscolhida, registrarEscolhaDeFoto, diagnosticarImagemDestaque,
+  localizarAbasDeMateria, diagnosticarDestaqueAberto, ehFormularioMateria, URL_NEWS,
+  escolherIdDaMidia, lerDestaqueNaPagina, ARTE_DE_INTERFACE, MOTIVOS_DESTAQUE,
+  instalarSentinelaDestaque, lerDestaqueGuardado, selecionarFotoNoAcervo, verificarImagemDestaque, obterOuAbrirMateria, localizarCampoChapeu, abrirMateriaEmSegundoPlano, prepararAbaMateria, converterData, coletarMaterias, processarLote, lerPendencias, enviarMateria, abrirPesquisaImagem };
   function normalizar(texto) {
 
     return String(texto || '')

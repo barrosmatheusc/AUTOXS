@@ -97,6 +97,12 @@ test('título excessivo impede exportação e PNG válido tem resolução final'
     assert.match(await gerador.locator('#aviso').textContent(), /longo demais|ultrapassa/i);
     await gerador.locator('#titulo').fill('Notícia de teste para a arte');
     assert.equal(await gerador.locator('#exportar').isEnabled(), true);
+    // O navegador real expõe showSaveFilePicker, e a exportação prefere salvar
+    // pelo seletor nativo do sistema — um diálogo que em teste nunca responde.
+    // Aqui o caminho exercitado é o do download, então o seletor sai de cena.
+    // O caminho do seletor tem teste próprio, no exercício de zoom negativo.
+    await gerador.evaluate(() => Object.defineProperty(window, 'showSaveFilePicker',
+      { value:undefined, configurable:true }));
     const download = gerador.waitForEvent('download');
     await gerador.locator('#exportar').click();
     const arquivo = await download;

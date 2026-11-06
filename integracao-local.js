@@ -21,8 +21,26 @@ function carregarIntegracaoLocal({ diretorio = __dirname, carregar = require,
         typeof fila?.processar !== 'function' || typeof conferirCandidata !== 'function') {
       throw new Error('módulos locais incompletos');
     }
+    // A memória visual é opcional: uma instalação sem ela continua com o
+    // Hermes inteiro, apenas sem observar as escolhas de fotografia.
+    let memoriaVisual = null;
+    try {
+      const modulo = carregar(path.join(diretorio, 'hermes-memoria.js'));
+      // Prefere a instância compartilhada do módulo: a fila do Hermes grava
+      // nela, e o painel precisa ler o mesmo cache.
+      const criada = typeof modulo.memoriaVisual?.registrar === 'function'
+        ? modulo.memoriaVisual
+        : (typeof modulo.criarMemoriaVisual === 'function'
+          ? modulo.criarMemoriaVisual(path.join(diretorio, 'hermes-memoria.json')) : null);
+      if (typeof criada?.registrar === 'function') memoriaVisual = criada;
+      // Ligação explícita: só a inicialização real do AutoXS faz a fila
+      // observar. Nenhum teste e nenhum require solto grava no arquivo real.
+      if (memoriaVisual) fila.usarMemoria?.(memoriaVisual);
+    } catch (erro) {
+      registrar(`⚠️ Memória visual indisponível: ${erro.message}. O AutoXS continuará normalmente.`);
+    }
     return { lerConfigLocal:seletor.lerConfigLocal, salvarConfigLocal:seletor.salvarConfigLocal,
-      estado, filaHermes:fila, conferirCandidata, caminhoPainel };
+      estado, filaHermes:fila, conferirCandidata, caminhoPainel, memoriaVisual };
   } catch (erro) {
     registrar(`⚠️ Integração local indisponível: ${erro.message}. O AutoXS continuará normalmente.`);
     return null;

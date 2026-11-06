@@ -16,7 +16,7 @@ function pastaTemporaria(fn) {
   try { return fn(pasta); } finally { fs.rmSync(pasta, { recursive:true, force:true }); }
 }
 
-function modulosFalsos(pasta, ativo) {
+function modulosFalsos(pasta, ativo, painelFotos = false) {
   fs.writeFileSync(path.join(pasta, 'config-local.json'), JSON.stringify({ hermes:{ ativo } }));
   fs.writeFileSync(path.join(pasta, 'hermes-painel.js'), '// painel local simulado');
   let processos = 0;
@@ -25,10 +25,13 @@ function modulosFalsos(pasta, ativo) {
     processar:() => { processos++; return { estado:'concluida' }; },
     emAndamento:() => false, parar:() => false };
   const carregar = nome => {
-    if (nome.endsWith('hermes-seletor.js')) return { lerConfigLocal:() => ({ ativo }), salvarConfigLocal:async () => ({ ativo }) };
+    if (nome.endsWith('hermes-seletor.js'))
+      return { lerConfigLocal:() => ({ ativo, painelFotos }),
+        salvarConfigLocal:async () => ({ ativo, painelFotos }) };
     if (nome.endsWith('hermes-estado.js')) return estado;
     if (nome.endsWith('hermes-fila.js')) return { filaHermes:fila };
     if (nome.endsWith('hermes-dom.js')) return { conferirCandidata:() => ({ encontrados:1, confere:true }) };
+    if (nome.endsWith('hermes-memoria.js')) return { criarMemoriaVisual:() => ({ registrar:async () => null }) };
     throw new Error('Módulo inesperado');
   };
   return { carregar, processos:() => processos };
@@ -121,7 +124,10 @@ test('painel local habilitado conserva o controle, sem iniciar processo', async 
   fs.writeFileSync(path.join(pasta, 'config-local.json'), JSON.stringify({ hermes:{ ativo:true } }));
   fs.writeFileSync(path.join(pasta, 'hermes-painel.js'),
     'window.atualizarHermes = () => {};');
-  const falso = modulosFalsos(pasta, true);
+  // A area visual do Hermes de fotos esta em standby: ela so aparece com
+  // painelFotos: true. Aqui o teste pede a exibicao, porque e justamente o
+  // controle visivel que ele verifica.
+  const falso = modulosFalsos(pasta, true, true);
   const integracao = carregarIntegracaoLocal({ diretorio:pasta, carregar:falso.carregar });
   const browser = await chromium.launch({ channel:'msedge', headless:true });
   const contexto = await browser.newContext();
@@ -141,9 +147,38 @@ test('painel local habilitado conserva o controle, sem iniciar processo', async 
   }
 });
 
+test('em standby a secao do Hermes de fotos fica oculta, sem perder a ponte', async () => {
+  const pasta = fs.mkdtempSync(path.join(os.tmpdir(), 'autoxs-painel-standby-'));
+  fs.writeFileSync(path.join(pasta, 'config-local.json'), JSON.stringify({ hermes:{ ativo:true } }));
+  fs.writeFileSync(path.join(pasta, 'hermes-painel.js'), 'window.atualizarHermes = () => {};');
+  const falso = modulosFalsos(pasta, true, false);
+  const integracao = carregarIntegracaoLocal({ diretorio:pasta, carregar:falso.carregar });
+  const browser = await chromium.launch({ channel:'msedge', headless:true });
+  const contexto = await browser.newContext();
+  try {
+    const painel = await criarPainelManual(contexto, async () =>
+      ({ abertas:0, enviadas:0, pendentes:0, erros:0 }), null,
+      undefined, null, null, null, null, null, integracao);
+    // Oculta, porem presente: ocultar nao e remover.
+    assert.equal(await painel.locator('#hermes').count(), 1);
+    assert.equal(await painel.locator('#hermes').isVisible(), false);
+    // A ponte continua instalada, para a reativacao nao exigir reconstrucao.
+    assert.equal(await painel.evaluate(() => typeof window.hermesAutoXS), 'function');
+    assert.equal(falso.processos(), 0, 'o standby nao pode iniciar processo nenhum');
+    // E o resto do painel segue inteiro.
+    for (const botao of ['#atualizar', '#adicionar', '#compartilhar', '#gerador-artes',
+      '#gerador-videos', '#abrir-configuracoes'])
+      assert.equal(await painel.locator(botao).isVisible(), true, botao);
+  } finally {
+    await contexto.close(); await browser.close();
+    fs.rmSync(pasta, { recursive:true, force:true });
+  }
+});
+
 test('arquivos pessoais e exportações estão ignorados sem apagar dados locais', () => {
   const raiz = path.join(__dirname, '..');
   const arquivos = ['config-local.json', 'config-local.json.example', 'hermes-seletor.js',
+    'hermes-memoria.js', 'hermes-memoria.json', 'backups/hermes-memoria-corrompida-1.json',
     'hermes-painel.js', 'hermes-candidata-1.png', 'test/hermes-fila.test.js',
     'AUTOXS_DADOS_2026-11-03.json', 'historico-autoxs.json', 'instalacao-autoxs.id',
     'backups/exemplo.json', '.env', 'sessao.json'];
@@ -157,3 +192,42 @@ test('arquivos pessoais e exportações estão ignorados sem apagar dados locais
   assert.match(bat, /git merge --ff-only origin\/main/);
   assert.doesNotMatch(bat, /git (?:clean|reset --hard)/);
 });
+
+// ---------------------------------------------- memória visual (Fase 0)
+
+test('memória visual fica disponível mesmo com o Hermes desligado', () => pastaTemporaria(pasta => {
+  const falso = modulosFalsos(pasta, false);
+  const integracao = carregarIntegracaoLocal({ diretorio:pasta, carregar:falso.carregar });
+  assert.equal(integracao.lerConfigLocal().ativo, false);
+  // Observar a escolha humana não depende de o Hermes estar ligado.
+  assert.equal(typeof integracao.memoriaVisual.registrar, 'function');
+  assert.equal(falso.processos(), 0);
+}));
+
+test('sem o módulo de memória o resto da integração continua inteiro', () => pastaTemporaria(pasta => {
+  const falso = modulosFalsos(pasta, true);
+  const avisos = [];
+  const carregar = nome => {
+    if (nome.endsWith('hermes-memoria.js')) throw new Error('módulo ausente');
+    return falso.carregar(nome);
+  };
+  const integracao = carregarIntegracaoLocal({ diretorio:pasta, carregar, registrar:m => avisos.push(m) });
+  assert.notEqual(integracao, null, 'a integração não pode cair por causa da memória');
+  assert.equal(integracao.memoriaVisual, null);
+  assert.equal(typeof integracao.filaHermes.processar, 'function');
+  assert.match(avisos.join(' '), /Memória visual indisponível/);
+}));
+
+test('módulo de memória sem o formato esperado é ignorado sem derrubar nada', () => pastaTemporaria(pasta => {
+  const falso = modulosFalsos(pasta, true);
+  const carregar = nome => nome.endsWith('hermes-memoria.js')
+    ? { criarMemoriaVisual:() => ({}) } : falso.carregar(nome);
+  const integracao = carregarIntegracaoLocal({ diretorio:pasta, carregar });
+  assert.notEqual(integracao, null);
+  assert.equal(integracao.memoriaVisual, null);
+}));
+
+test('sem integração local o núcleo não conhece memória visual', () => pastaTemporaria(pasta => {
+  assert.equal(carregarIntegracaoLocal({ diretorio:pasta,
+    carregar:() => { throw new Error('não deve carregar módulos'); } }), null);
+}));

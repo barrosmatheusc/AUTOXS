@@ -94,6 +94,18 @@ footer { color: #91a79b; font-size: 13px; line-height: 1.65; padding: 22px 12px 
 .hermes-sessao li[data-situacao="revisao"] span.hermes-item-nota,
 .hermes-sessao li[data-situacao="falha"] span.hermes-item-nota { color: #ffd9a8; }
 @media(max-width: 560px) { .hermes-numeros { grid-template-columns: 1fr; } }
+.hermes-memoria { border-top: 1px solid #35473e; margin: 20px 0 0; padding: 18px 0 0; }
+.hermes-memoria[hidden] { display: none; }
+.hermes-memoria h3 { margin: 0 0 12px; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: #a6bfae; }
+.hermes-memoria-estado { margin: 0 0 12px; font-size: 13px; color: #dcebe3; }
+.hermes-memoria-nota { margin: 10px 0 0; font-size: 11px; line-height: 1.5; color: #9fb6a8; }
+.hermes-memoria-sub { margin: 16px 0 10px; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: #8fae9d; }
+.hermes-diagnostico { width: 100%; padding: 10px; border: 1px solid #4d6a5b; border-radius: 10px; background: #26382f; color: #dcebe3; font: 600 13px "Segoe UI", sans-serif; cursor: pointer; }
+.hermes-diagnostico:hover:not(:disabled) { background: #30463a; }
+.hermes-diagnostico:disabled { opacity: .55; cursor: wait; }
+.hermes-diagnostico-saida { margin: 12px 0 0; padding: 12px; max-height: 320px; overflow: auto; border: 1px solid #35473e; border-radius: 10px; background: #1b2620; color: #cfe3d7; font: 12px/1.55 "Cascadia Mono", Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+.hermes-diagnostico-saida[hidden], #hermes-destaque[hidden] { display: none; }
+#hermes-gabarito[hidden], #hermes-acervo[hidden] { display: none; }
 .hermes-modos { border: 0; border-top: 1px solid #35473e; margin: 20px 0 0; padding: 18px 0 0; }
 .hermes-modos legend { padding: 0; color: #a6bfae; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
 .hermes-modos label { display: flex; align-items: center; gap: 8px; color: #dcebe3; font-size: 14px; margin-top: 10px; }
@@ -176,6 +188,45 @@ footer { color: #91a79b; font-size: 13px; line-height: 1.65; padding: 22px 12px 
       <label><input type="radio" name="hermes-modo" id="hermes-modo-automatico" value="automatico"> Automático <small>seleciona a foto quando passar nos critérios</small></label>
       <p class="hermes-limiar" id="hermes-limiar">Adequação mínima para selecionar: <strong id="hermes-limiar-n">80</strong>/100. A matéria nunca é enviada pelo Hermes.</p>
     </fieldset>
+    <section class="hermes-memoria" id="hermes-memoria" hidden aria-labelledby="hermes-memoria-titulo">
+      <h3 id="hermes-memoria-titulo">Memória visual</h3>
+      <p class="hermes-memoria-estado" id="hermes-memoria-estado">—</p>
+      <dl class="hermes-campos">
+        <div><dt>Escolhas registradas</dt><dd id="hermes-memoria-total">—</dd></div>
+        <div><dt>Imagens distintas</dt><dd id="hermes-memoria-imagens">—</dd></div>
+        <div><dt>Último aprendizado</dt><dd id="hermes-memoria-ultimo">—</dd></div>
+        <div class="hermes-largo"><dt>Assuntos mais frequentes</dt><dd id="hermes-memoria-assuntos">—</dd></div>
+      </dl>
+      <p class="hermes-memoria-nota" id="hermes-memoria-nota"></p>
+      <div id="hermes-gabarito" hidden>
+        <h4 class="hermes-memoria-sub">Gabarito editorial</h4>
+        <dl class="hermes-campos">
+          <div><dt>Comparáveis</dt><dd id="hermes-gabarito-comparaveis">—</dd></div>
+          <div><dt>✓ Coincidiram</dt><dd id="hermes-gabarito-coincidiu">—</dd></div>
+          <div><dt>↻ Corrigidas</dt><dd id="hermes-gabarito-corrigiu">—</dd></div>
+          <div><dt>Concordância</dt><dd id="hermes-gabarito-concordancia">—</dd></div>
+          <div><dt>Aguardando</dt><dd id="hermes-gabarito-aguardando">—</dd></div>
+          <div><dt>Sem recomendação</dt><dd id="hermes-gabarito-sem">—</dd></div>
+        </dl>
+        <p class="hermes-memoria-nota" id="hermes-gabarito-nota"></p>
+      </div>
+      <div id="hermes-acervo" hidden>
+        <h4 class="hermes-memoria-sub">Acervo observado</h4>
+        <dl class="hermes-campos">
+          <div><dt>Candidatas observadas</dt><dd id="hermes-acervo-candidatas">—</dd></div>
+          <div><dt>Fotos distintas</dt><dd id="hermes-acervo-unicas">—</dd></div>
+          <div><dt>Repetições</dt><dd id="hermes-acervo-repeticoes">—</dd></div>
+          <div><dt>Reaproveitamento potencial</dt><dd id="hermes-acervo-potencial">—</dd></div>
+        </dl>
+        <p class="hermes-memoria-nota">Medição apenas. Nenhuma análise visual é evitada nesta fase.</p>
+      </div>
+      <div id="hermes-destaque" hidden>
+        <h4 class="hermes-memoria-sub">Foto de destaque</h4>
+        <button class="hermes-diagnostico" id="hermes-diagnostico" type="button">🔎 Diagnosticar foto de destaque</button>
+        <pre class="hermes-diagnostico-saida" id="hermes-diagnostico-saida" hidden></pre>
+        <p class="hermes-memoria-nota">Somente leitura das matérias já abertas. Não seleciona foto, não salva e não publica nada.</p>
+      </div>
+    </section>
     <div class="hermes-analise" id="hermes-analise" hidden>
       <h3>Última análise</h3>
       <dl class="hermes-campos">

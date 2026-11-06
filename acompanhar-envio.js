@@ -19,7 +19,10 @@ async function confirmarSalvamento(aba, mensagensAntes) {
 
 // Instalado somente nas abas de atualização que ficaram para revisão manual.
 // Não clica nem envia: acompanha a requisição do formulário da própria matéria.
-async function acompanharEnvioManual(aba, formulario, aoConfirmar) {
+// aoEnviar (opcional) é chamado assim que o envio parte, com a página ainda
+// no formulário. Serve para ler um estado que o salvamento vai destruir: o
+// resultado fica PROVISÓRIO e só é entregue a aoConfirmar se o CMS confirmar.
+async function acompanharEnvioManual(aba, formulario, aoConfirmar, aoEnviar = null) {
   const inicial = new URL(aba.url());
   if (!/^\/news\/edit\//.test(inicial.pathname) || await formulario.count() !== 1) return null;
   const action = new URL(await formulario.evaluate(form => form.action));
@@ -48,7 +51,10 @@ async function acompanharEnvioManual(aba, formulario, aoConfirmar) {
           ![action.pathname, inicial.pathname].includes(destino.pathname)) return;
       pendentes.set(requisicao, {
         numero: ++sequencia,
-        antes: aba.locator(SELETOR_SUCESSO).allTextContents().catch(() => mensagensIniciais)
+        antes: aba.locator(SELETOR_SUCESSO).allTextContents().catch(() => mensagensIniciais),
+        // Disparada já, resolvida depois: a leitura corre em paralelo com o
+        // envio e nunca o atrasa. Uma falha aqui vira apenas ausência de dado.
+        provisorio: aoEnviar ? Promise.resolve().then(() => aoEnviar()).catch(() => null) : null
       });
     } catch {
       // Requisições sem frame ou de outros recursos não são envios da matéria.
@@ -75,7 +81,8 @@ async function acompanharEnvioManual(aba, formulario, aoConfirmar) {
     if (atual.origin !== inicial.origin ||
         ![inicial.pathname, action.pathname, '/news', '/news/'].includes(atual.pathname)) return;
     parar();
-    await aoConfirmar();
+    // Só agora o provisório vira definitivo: o CMS confirmou o salvamento.
+    await aoConfirmar(tentativa.provisorio ? await tentativa.provisorio.catch(() => null) : null);
     try {
       await aba.close();
       console.log('Matéria enviada manualmente. Aba fechada.');

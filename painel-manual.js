@@ -124,6 +124,26 @@ async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao 
           if (!Object.keys(alteracoes).length) return { ok:false, mensagem:'Nada a alterar no Hermes.' };
           return { ok:true, estado:aplicarConfigHermes(await salvarConfigHermes(alteracoes)) };
         }
+        // Só leitura: os indicadores não gravam nem disparam análise.
+        if (pedido.acao === 'memoria') {
+          const visual = integracaoLocal.memoriaVisual;
+          if (!visual) return { ok:true, memoria:{ estado:'indisponivel' } };
+          // Três leituras independentes; nenhuma escreve nem dispara análise.
+          const [memoria, gabarito, acervo] = await Promise.all([
+            visual.estatisticas(),
+            visual.linhaDeBase?.() ?? null,
+            visual.metricasDeRepeticao?.() ?? null
+          ]);
+          return { ok:true, memoria, gabarito, acervo };
+        }
+        // Somente leitura das abas de matéria que o próprio AutoXS já mantém
+        // abertas. Não clica, não seleciona foto, não salva, não publica, não
+        // recarrega e não fecha aba. Não altera a captura nem a memória.
+        if (pedido.acao === 'diagnosticarDestaque') {
+          const { diagnosticarDestaqueAberto } = require('./autoxs');
+          const { abas } = await diagnosticarDestaqueAberto(context);
+          return { ok:true, abas };
+        }
         if (pedido.acao === 'parar') return { ok:true, interrompendo:filaHermes.parar() };
         return { ok:false, mensagem:'Operação do Hermes inválida.' };
       } catch (erro) {
@@ -333,8 +353,14 @@ async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao 
       if (painel.isClosed() || painel.url() !== url) return;
       try {
         await painel.addScriptTag({ path:integracaoLocal.caminhoPainel });
-        await painel.evaluate(() => { document.querySelector('#hermes').hidden = false; });
-        aplicarConfigHermes(integracaoLocal.lerConfigLocal());
+        const config = integracaoLocal.lerConfigLocal();
+        // STANDBY do Hermes de fotos: a seção só aparece com painelFotos: true
+        // em config-local.json. Nada é removido — a fila, a seleção, a memória
+        // e os testes continuam inteiros, apenas sem área visual no painel.
+        await painel.evaluate(mostrar => {
+          document.querySelector('#hermes').hidden = !mostrar;
+        }, config.painelFotos === true);
+        aplicarConfigHermes(config);
       } catch (erro) {
         console.warn(`⚠️ Painel local indisponível: ${erro.message}. O AutoXS continuará normalmente.`);
         await painel.evaluate(() => { document.querySelector('#hermes').hidden = true; }).catch(() => {});
