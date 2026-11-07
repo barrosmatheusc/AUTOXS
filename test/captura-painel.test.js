@@ -13,6 +13,10 @@ test('Central local persiste, revisa, entrega a quatro quadros e mantém exceden
   const navegador=await chromium.launch({channel:'msedge',headless:true});
   t.after(()=>navegador.close());
   const contexto=await navegador.newContext({viewport:{width:1100,height:800}});
+  // Teste de interface longo: cinco ciclos completos de captura em navegador
+  // real. Sob carga paralela, os 30 s padrao do Playwright nao bastam para um
+  // clique, e o teste falhava sem haver regressao no AutoXS.
+  contexto.setDefaultTimeout(60000);
   let rede=0;
   await contexto.route(/^https?:/,rota=>{rede++;return rota.abort();});
   await instalarCaptura(contexto,pasta);
