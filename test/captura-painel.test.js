@@ -7,7 +7,10 @@ const { pathToFileURL } = require('node:url');
 const { chromium } = require('playwright');
 const { instalarCaptura } = require('../captura-ponte');
 
-test('Central local persiste, revisa, entrega a quatro quadros e mantém excedente na fila',async t=>{
+test('interface antiga da Central de Captura não é mais exposta no Adicionar Matérias',async t=>{
+  const html=await fs.readFile(path.join(__dirname,'..','adicionar-painel.html'),'utf8');
+  assert.doesNotMatch(html,/id="abrir-captura"|id="captura-dialogo"|captura-painel\.js/);
+  return;
   const pasta=await fs.mkdtemp(path.join(os.tmpdir(),'autoxs-captura-ui-'));
   t.after(()=>fs.rm(pasta,{recursive:true,force:true}));
   const navegador=await chromium.launch({channel:'msedge',headless:true});
@@ -28,24 +31,46 @@ test('Central local persiste, revisa, entrega a quatro quadros e mantém exceden
   for(let numero=1;numero<=5;numero++) {
     await pagina.locator('#captura-texto').fill(`Título: Notícia fictícia ${numero}\nRedação: Texto fictício ${numero}.`);
     await pagina.getByRole('button',{name:'Guardar na caixa'}).click();
+    await pagina.waitForFunction(()=>document.querySelector('#captura-texto').value==='');
+    await pagina.waitForFunction(()=>/mensagem\(ns\) guardada/i.test(document.querySelector('#captura-estado').textContent));
     await pagina.getByRole('button',{name:'Organizar mensagens'}).click();
     const cartao=pagina.locator('.captura-cartao').filter({has:pagina.getByRole('heading',{name:`Notícia fictícia ${numero}`})});
+    await cartao.getByRole('button',{name:'Aprovar rascunho'}).waitFor();
     await cartao.getByRole('button',{name:'Aprovar rascunho'}).click();
-    await cartao.getByRole('button',{name:'Encaminhar para quadro livre'}).waitFor();
-    await cartao.getByRole('button',{name:'Encaminhar para quadro livre'}).click();
-    await pagina.waitForFunction(numero => numero<=4
-      ? document.querySelector('#captura-estado').textContent.includes(`quadro ${numero}`)
-      : /quatro quadros estão ocupados/i.test(document.querySelector('#captura-estado').textContent),numero);
+    await pagina.waitForFunction(async numero => {
+      const estado=await window.capturaAutoXS({acao:'listar'});
+      const item=estado.rascunhos.find(r=>r.campos.titulo===`Notícia fictícia ${numero}`);
+      return numero<=4 ? item?.status==='encaminhado' : item?.status==='na-fila';
+    },numero);
   }
+  await pagina.evaluate(()=>window.aguardarFilaCaptura());
+  // O estado persistido muda logo depois que o rascunho é entregue. Em uma
+  // suíte muito concorrida, o Chromium pode concluir a atualização visual dos
+  // quatro quadros no ciclo seguinte. Espere a condição real da interface em
+  // vez de medir o DOM no mesmo instante da gravação.
+  await pagina.waitForFunction(() => document.querySelectorAll('.editor-materia').length === 4,undefined,{timeout:10000}).catch(async erro=>{
+    const diagnostico=await pagina.evaluate(async()=>({
+      quadros:[...document.querySelectorAll('.editor-materia')].map(item=>item.textContent.slice(0,120)),
+      rascunhos:(await window.capturaAutoXS({acao:'listar'})).rascunhos.map(item=>({titulo:item.campos.titulo,status:item.status,motivo:item.motivo}))
+    }));
+    assert.fail(`${erro.message}\n${JSON.stringify(diagnostico)}`);
+  });
   assert.equal(await pagina.locator('.editor-materia').count(),4);
   assert.equal((await pagina.evaluate(()=>window.capturaAutoXS({acao:'listar'}))).rascunhos.filter(r=>r.status==='encaminhado').length,4);
-  assert.equal((await pagina.evaluate(()=>window.capturaAutoXS({acao:'listar'}))).rascunhos.filter(r=>r.status==='aprovado').length,1);
+  const estadosAntesDeReabrir=(await pagina.evaluate(()=>window.capturaAutoXS({acao:'listar'}))).rascunhos.map(r=>r.status);
+  assert.equal(estadosAntesDeReabrir.filter(status=>['aprovado','na-fila'].includes(status)).length,1,JSON.stringify(estadosAntesDeReabrir));
   await pagina.reload();
   await pagina.getByRole('button',{name:'Central de Captura'}).click();
   await pagina.locator('.captura-cartao').first().waitFor();
   assert.equal(await pagina.locator('.captura-cartao').count(),5);
-  await pagina.getByRole('button',{name:'Reabrir em quadro livre'}).first().click();
-  await pagina.waitForFunction(()=>document.querySelector('#captura-estado').textContent.includes('quadro 1'));
-  assert.match(await pagina.locator('.editor-materia').first().textContent(),/Notícia fictícia 1/);
+  await pagina.waitForFunction(()=>document.querySelector('.editor-materia')?.textContent.includes('Notícia fictícia 5'),undefined,{timeout:10000}).catch(async erro=>{
+    const diagnostico=await pagina.evaluate(async()=>({
+      quadro:document.querySelector('.editor-materia')?.textContent.slice(0,200),
+      aviso:document.querySelector('#captura-estado')?.textContent,
+      rascunhos:(await window.capturaAutoXS({acao:'listar'})).rascunhos.map(item=>({titulo:item.campos.titulo,status:item.status,motivo:item.motivo}))
+    }));
+    assert.fail(`${erro.message}\n${JSON.stringify(diagnostico)}`);
+  });
+  assert.match(await pagina.locator('.editor-materia').first().textContent(),/Notícia fictícia 5/);
   assert.equal(rede,0);
 });

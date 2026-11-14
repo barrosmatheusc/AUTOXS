@@ -55,3 +55,32 @@ test('engrenagem abre central, aplica tema/tamanho e restaura ao recarregar', as
     }
   } finally { await contexto.close(); await browser.close(); }
 });
+
+test('Fotografias escolhe visualmente mídia do CMS e salva associação local por cidade', async () => {
+  const browser=await chromium.launch({channel:'msedge',headless:true});
+  const contexto=await browser.newContext({viewport:{width:1100,height:760}});
+  const pagina=await contexto.newPage();
+  let salvas=validarPreferencias({}); let buscas=0;
+  await pagina.exposeFunction('configuracoesAutoXS',async pedido=>{
+    if(pedido.acao==='obter') return {ok:true,preferencias:salvas,versao:'1.0.0',pastaFotosDisponivel:false};
+    if(pedido.acao==='buscarFotosCms') { buscas++; return {ok:true,itens:[{id:'99',nome:'Maceió Clima.jpg',url:'https://cdn.test/images/maceio.jpg'}]}; }
+    if(pedido.acao==='salvar') { salvas=validarPreferencias(pedido.preferencias); return {ok:true,preferencias:salvas,pastaFotosDisponivel:false}; }
+    if(pedido.acao==='fecharFotosCms') return {ok:true};
+    return {ok:false,mensagem:'Operação inesperada no teste.'};
+  });
+  try {
+    await pagina.goto(pathToFileURL(path.join(__dirname,'..','painel-manual.html')).href);
+    await pagina.getByRole('button',{name:'Configurações'}).click();
+    await pagina.getByRole('button',{name:'Fotografias'}).click();
+    assert.match(await pagina.locator('#config-pasta-fotos-estado').textContent(),/indisponível/i);
+    await pagina.locator('#config-clima-cidade').fill('Maceió');
+    await pagina.locator('#config-clima-termo').fill('clima maceió');
+    await pagina.getByRole('button',{name:'Abrir banco de imagens'}).click();
+    const opcao=pagina.getByRole('button',{name:/Maceió Clima\.jpg · mídia 99/});
+    await opcao.click();
+    assert.equal(await opcao.getAttribute('aria-pressed'),'true');
+    await pagina.getByRole('button',{name:'Salvar associação'}).click();
+    await pagina.waitForFunction(()=>document.querySelector('#config-clima-estado').textContent.includes('Associação salva'));
+    assert.equal(buscas,1); assert.deepEqual(salvas.fotosClima.Maceió,{id:'99',url:'https://cdn.test/images/maceio.jpg',nome:'Maceió Clima.jpg'});
+  } finally { await contexto.close(); await browser.close(); }
+});

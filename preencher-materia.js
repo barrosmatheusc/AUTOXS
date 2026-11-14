@@ -7,10 +7,12 @@ const normalizar = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f
 // Preserva letras, acentos e caixa, normalizando apenas espaços e Unicode.
 const linhaUnica = s => String(s || '').normalize('NFC').replace(/\s+/g, ' ').trim();
 function validarCampos(entrada) {
-  const nomes = ['categoria','data','titulo','chapeu','bigode','redacao','autor','imagem'];
-  if (!entrada || nomes.some(k => typeof entrada[k] !== 'string')) throw new Error('Confira os campos da matéria antes de enviar ao formulário.');
-  const campos = Object.fromEntries(nomes.map(k => [k, entrada[k].trim() ? entrada[k] : '']));
-  for (const chave of ['categoria', 'titulo', 'chapeu', 'bigode', 'autor']) campos[chave] = linhaUnica(campos[chave]);
+  const nomes = ['categoria','data','titulo','chapeu','bigode','redacao','autor','imagem','imagemNome','legendaImagem','creditoImagem','portais','tags','tipoRadar','cidade'];
+  const obrigatorios = ['categoria','data','titulo','chapeu','bigode','redacao','autor','imagem'];
+  if (!entrada || obrigatorios.some(k => typeof entrada[k] !== 'string') || nomes.some(k => entrada[k] !== undefined && typeof entrada[k] !== 'string'))
+    throw new Error('Confira os campos da matéria antes de enviar ao formulário.');
+  const campos = Object.fromEntries(nomes.map(k => [k, String(entrada[k] || '').trim() ? String(entrada[k]) : '']));
+  for (const chave of ['categoria', 'titulo', 'chapeu', 'bigode', 'autor', 'imagemNome', 'legendaImagem', 'creditoImagem', 'portais', 'tags', 'tipoRadar', 'cidade']) campos[chave] = linhaUnica(campos[chave]);
   // Garante a caixa alta no formulário mesmo após uma edição manual na revisão.
   campos.chapeu = campos.chapeu.trim().toLocaleUpperCase('pt-BR');
   if (nomes.some(k => campos[k].length > 120000)) throw new Error('A matéria ultrapassou o tamanho permitido.');
@@ -26,7 +28,7 @@ function formatarData(valor) {
   if (data.getUTCFullYear()!==+a || data.getUTCMonth()!==+m-1 || data.getUTCDate()!==+d || +h>23 || +min>59 || +seg>59) throw new Error('Confira a data de publicação.');
   return d + '/' + m + '/' + a + ' ' + h + ':' + min + ':' + seg.padStart(2,'0');
 }
-async function selecionarPortais(aba) {
+async function selecionarPortais(aba, indicados = '') {
   const portais = [
     { nome: 'Tribuna do Agreste', rotulo: /\bTribuna\s+do\s+Agreste\b/i },
     { nome: 'Tribuna do Sertão', rotulo: /\bTribuna\s+do\s+Sert[aã]o\b/i }
@@ -38,11 +40,14 @@ async function selecionarPortais(aba) {
     if (await caixa.count() !== 1) throw new Error('Não foi possível identificar a caixa do portal ' + portal.nome + '. Confira os portais no formulário.');
     caixas.push({ caixa, nome: portal.nome });
   }
+  const texto = normalizar(indicados);
+  const definidos = texto ? new Set(portais.filter(portal => portal.rotulo.test(indicados)).map(portal => portal.nome)) : null;
+  if (texto && !definidos.size) throw new Error('Os portais informados não correspondem a Tribuna do Sertão ou Tribuna do Agreste. Confira na revisão.');
   for (const { caixa, nome } of caixas) {
     try {
-      // check mantém marcada uma caixa que já estiver selecionada.
-      await caixa.check();
-      if (!await caixa.isChecked()) throw new Error('Portal não selecionado.');
+      const marcar = !definidos || definidos.has(nome);
+      if (marcar) await caixa.check(); else await caixa.uncheck();
+      if (await caixa.isChecked() !== marcar) throw new Error('Portal não selecionado.');
     } catch {
       throw new Error('Não foi possível marcar o portal ' + nome + '. Confira a caixa no formulário.');
     }
@@ -98,7 +103,7 @@ async function preencherCampos(aba, entrada) {
     e.dispatchEvent(new Event('change',{bubbles:true}));
   }, formatarData(campos.data));
   if (await data.evaluate(e=>e.value) !== formatarData(campos.data)) throw new Error('Confira a data no formulário do site.');
-  await selecionarPortais(aba);
+  await selecionarPortais(aba, campos.portais);
   if (campos.imagem.trim()) avisos.push('Imagem indicada na revisão: selecione o arquivo correspondente na Imagem de Destaque.');
   return { envioManual:true, categoria:categoriaSelecionada, avisos };
 }
@@ -110,14 +115,6 @@ function criarEnvioIndividual(context, garantirLogin, prepararFotos, criarAba, a
     if (!abaAdicionar || abaAdicionar.isClosed()) {
       abaAdicionar = await criarAba();
       ultimoEnvio = null;
-      try {
-        await prepararFotos(abaAdicionar);
-      }
-      catch (erro) {
-        await abaAdicionar.close().catch(() => {});
-        abaAdicionar = null;
-        throw erro;
-      }
     }
     return abaAdicionar;
   }
@@ -137,7 +134,7 @@ function criarEnvioIndividual(context, garantirLogin, prepararFotos, criarAba, a
     if (ultimoEnvio && ultimoEnvio.id === id && ultimoEnvio.concluido && ultimoEnvio.conteudo === conteudo && aba.url() === URL_ADICIONAR) {
       const titulo = aba.locator('#inp_title');
       if (await titulo.count() === 1 && await titulo.evaluate(e => e.value) === campos.titulo) {
-        await selecionarPortais(aba);
+        await selecionarPortais(aba, campos.portais);
         await aba.bringToFront();
         return { ...ultimoEnvio.resultado, reutilizada:true };
       }
@@ -152,6 +149,13 @@ function criarEnvioIndividual(context, garantirLogin, prepararFotos, criarAba, a
     if (await aba.locator('#inp_title').evaluate(e=>e.value)) throw new Error('O formulário não está vazio. Confira a aba aberta.');
     await log('Preenchendo os campos da matéria…');
     registro.resultado = await preencherCampos(aba,campos);
+    try {
+      const foto = await prepararFotos(aba, { ...entrada, campos }, log);
+      if (foto?.avisos?.length) registro.resultado.avisos.push(...foto.avisos);
+      if (foto?.estado) registro.resultado.foto = foto;
+    } catch (erro) {
+      registro.resultado.avisos.push('FOTO PENDENTE — ' + (erro.message || 'não foi possível preparar a imagem de destaque.'));
+    }
     registro.concluido = true;
     if (aoEvento) {
       try {
@@ -188,9 +192,9 @@ function criarEnvioIndividual(context, garantirLogin, prepararFotos, criarAba, a
   return enviar;
 }
 
-function criarEnvioAoSite(context, garantirLogin, prepararFotos = async () => {}, criarAba = () => context.newPage(), aoEvento = null) {
+function criarEnvioAoSite(context, garantirLogin, prepararFotos = async () => {}, criarAba = () => context.newPage(), aoEvento = null, opcoes = {}) {
   if (typeof context?.exposeBinding === 'function') {
-    require('./captura-ponte').instalarCaptura(context)
+    require('./captura-ponte').instalarCaptura(context, opcoes.pastaCaptura)
       .catch(erro => console.warn('[CAPTURA] Não foi possível instalar a caixa de entrada:', erro.message));
   }
   const espacos = new Map();

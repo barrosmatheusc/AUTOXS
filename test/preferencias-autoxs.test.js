@@ -13,13 +13,18 @@ test('preferências locais persistem, validam valores e restauram padrões', asy
     assert.deepEqual(await preferencias.ler(), preferencias.padroes());
     const dados = await preferencias.salvar({
       tema:'claro', tamanho:'ampliado', logsDetalhados:true,
-      confirmacoes:true, pastaVideos:pasta, senha:'não salvar'
+      confirmacoes:true, pastaVideos:pasta, buscarFotosAutomaticamente:false,
+      pastaFotos:pasta, fotosClima:{Maceió:{id:'123',url:'https://cdn.test/foto.jpg',nome:'Clima'}}, senha:'não salvar'
     });
     assert.equal(dados.tema, 'claro');
     assert.equal(dados.pastaVideos, pasta);
+    assert.equal(dados.buscarFotosAutomaticamente, false);
+    assert.equal(dados.pastaFotos, pasta);
+    assert.equal(dados.fotosClima.Maceió.id, '123');
     assert.equal(JSON.parse(await fs.readFile(arquivo, 'utf8')).senha, undefined);
     assert.deepEqual(await criarPreferenciasAutoXS({ arquivo }).ler(), dados);
     await assert.rejects(preferencias.salvar({ ...dados, pastaVideos:'pasta-relativa' }), /caminho absoluto/);
+    await assert.rejects(preferencias.salvar({ ...dados, pastaFotos:'pasta-relativa' }), /caminho absoluto/);
     assert.deepEqual(await preferencias.ler(), dados);
     assert.deepEqual(await preferencias.restaurar(), preferencias.padroes());
     assert.deepEqual(await criarPreferenciasAutoXS({ arquivo }).ler(), preferencias.padroes());

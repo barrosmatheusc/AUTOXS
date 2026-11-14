@@ -126,23 +126,37 @@
   }
   function identificarMateria(texto, agora = new Date()) {
     if (typeof texto !== 'string' || !texto.trim()) throw new Error('Cole o texto da matéria para identificar os campos.');
-    if (texto.length > 120000) throw new Error('Cole uma matéria de cada vez, com até 120 mil caracteres.');
-    const campos = { categoria: '', data: horarioAtual(agora), titulo: '', chapeu: '', bigode: '', redacao: '', autor: '', imagem: '' };
+    if (texto.length > 120000) throw new Error('Cole um texto de até 120 mil caracteres.');
+    const campos = { categoria: '', data: horarioAtual(agora), titulo: '', chapeu: '', bigode: '', redacao: '', autor: '', imagem: '',
+      imagemNome:'', legendaImagem:'', creditoImagem:'', tags:'', portais:'', tipoRadar:'', cidade:'' };
     const origem = {};
     const linhas = limparEstruturasCopiadas(texto);
     const assinaturaFinal = identificarAssinaturaFinal(linhas);
     const retirar = new Set(assinaturaFinal?.indices || []);
-    const nomes = { categoria: 'categoria', 'categoria sugerida': 'categoria', editoria: 'categoria', titulo: 'titulo', chapeu: 'chapeu', bigode: 'bigode', subtitulo: 'bigode', autor: 'autor', autora: 'autor', autoria: 'autor', 'imagem destaque': 'imagem', 'imagem de destaque': 'imagem', 'foto destaque': 'imagem', 'foto de destaque': 'imagem', redacao: 'redacao', texto: 'redacao', 'texto da materia': 'redacao' };
+    const nomes = { categoria: 'categoria', 'categoria sugerida': 'categoria', editoria: 'categoria', titulo: 'titulo', chapeu: 'chapeu', bigode: 'bigode', subtitulo: 'bigode', autor: 'autor', autora: 'autor', autoria: 'autor',
+      'imagem destaque': 'imagemNome', 'imagem de destaque': 'imagemNome', 'imagem de destaque sugerida':'imagemNome', 'foto destaque': 'imagemNome', 'foto de destaque': 'imagemNome', 'imagem anexa':'imagemNome',
+      'legenda da imagem':'legendaImagem', 'legenda da foto':'legendaImagem', 'credito':'creditoImagem', 'creditos':'creditoImagem', 'credito da imagem':'creditoImagem', 'creditos da imagem':'creditoImagem',
+      'credito/origem da imagem':'creditoImagem', 'credito / origem da imagem':'creditoImagem', tags:'tags', 'portais recomendados':'portais', 'portal recomendado':'portais', 'portal(is) recomendado(s)':'portais',
+      redacao: 'redacao', texto: 'redacao', 'texto da materia': 'redacao' };
     const informados = new Set();
-    const lerRotulo = linha => {
+    const separarRotulo = linha => {
       const limpa = limpar(linha);
-      const par = limpa.match(/^([^:]{1,50}):\s*(.*)$/);
-      const rotulo = normalizar(par ? par[1].trim() : limpa);
+      // E-mails editoriais chegam com “:”, travessão, meia-risca, hífen ou
+      // apenas o rótulo em uma linha e o valor na seguinte. O separador é só
+      // apresentação: a palavra do rótulo define o campo.
+      const par = limpa.match(/^(.{1,50}?)(?:\s*:\s*|\s*[—–]\s*|\s+-\s+)(.*)$/u);
+      return par
+        ? { rotulo:par[1].trim(), valor:par[2].trim(), temSeparador:true }
+        : { rotulo:limpa, valor:'', temSeparador:false };
+    };
+    const lerRotulo = linha => {
+      const separado = separarRotulo(linha);
+      const rotulo = normalizar(separado.rotulo);
       if (!Object.prototype.hasOwnProperty.call(nomes, rotulo)) return null;
       // “Redação” sozinha continua podendo ser a assinatura, inclusive após AUTOR.
       // Para nomear o corpo, aceita “Redação:” ou um cabeçalho marcado “REDAÇÃO”.
-      if (!par && rotulo === 'redacao' && !(limpa === 'REDAÇÃO' && /\*\*|^\s*#/.test(linha))) return null;
-      return { campo: nomes[rotulo], valor: par ? par[2].trim() : '' };
+      if (!separado.temSeparador && rotulo === 'redacao' && !(separado.rotulo === 'REDAÇÃO' && /\*\*|^\s*#/.test(linha))) return null;
+      return { campo: nomes[rotulo], valor:separado.valor };
     };
     let blocoCMS = false;
     let blocoServico = false;
@@ -167,9 +181,18 @@
       if (/^dados para o cms\s*:?$/.test(chave)) { blocoCMS = true; retirar.add(i); continue; }
       // A seção editorial que vem depois dos metadados continua no corpo.
       if (blocoCMS && (/^\s*#{1,6}\s/.test(linhas[i]) || /^(transparencia|fontes|referencias)\s*:?$/.test(chave))) blocoCMS = false;
-      const par = limpa.match(/^([^:]{1,50}):\s*(.*)$/);
-      const rotulo = par ? normalizar(par[1].trim()) : '';
-      const identificado = lerRotulo(linhas[i]);
+      const par = separarRotulo(linhas[i]);
+      const rotulo = par.temSeparador ? normalizar(par.rotulo) : '';
+      let identificado = lerRotulo(linhas[i]);
+      // Em pacotes editoriais, “Texto: Nome” e “Redação: Nome” podem ser autoria,
+      // enquanto o cabeçalho posterior “### TEXTO” identifica o corpo.
+      if (identificado?.campo === 'redacao' && identificado.valor) {
+        const valorCurto = identificado.valor.length <= 120 && identificado.valor.split(/\s+/).length <= 12 && !/[.!?]$/.test(identificado.valor);
+        const corpoPosterior = linhas.slice(i + 1).some(linha => /^\s*#{1,6}\s*(?:texto|reda[çc][aã]o)\s*:??\s*$/i.test(linha));
+        if (valorCurto && corpoPosterior) identificado = { campo:'autor', valor:identificado.valor };
+      }
+      if (!identificado && par.temSeparador && normalizar(par.rotulo) === 'foto' && par.valor && !/\.(?:jpe?g|png|webp|gif)$/i.test(par.valor))
+        identificado = { campo:'creditoImagem', valor:par.valor };
       const campo = identificado?.campo;
       if (campo) {
         informados.add(campo);
@@ -194,12 +217,17 @@
           if (!valor) {
             let proxima = i + 1;
             while (proxima < linhas.length && !linhas[proxima].trim()) proxima++;
-            if (proxima < linhas.length && !lerRotulo(linhas[proxima])) {
+            const autoriaTexto = campo === 'autor' && proxima < linhas.length &&
+              /^\s*(?:\*{0,2})?(?:texto|reda[çc][aã]o)\s*:\s*(.+)$/i.exec(linhas[proxima]);
+            if (autoriaTexto) {
+              valor = limpar(autoriaTexto[1]); retirar.add(proxima);
+            } else if (proxima < linhas.length && !lerRotulo(linhas[proxima])) {
               valor = limpar(linhas[proxima]);
               retirar.add(proxima);
             }
           }
           if (valor && !campos[campo]) {
+            if (campo === 'creditoImagem') valor = valor.replace(/^\s*(?:foto|cr[eé]ditos?)\s*:\s*/i, '').trim();
             campos[campo] = valor; origem[campo] = 'Informado no texto';
             if (campo === 'titulo') posicaoTitulo = i;
           }
@@ -223,12 +251,14 @@
       // preserva URLs, frases que citam arquivos e campos de imagem explícitos.
       const nomeArquivo = limpar(linhas[i]);
       if (/^[\p{L}\p{N}_][\p{L}\p{N}_.()\-]*\.(?:jpe?g|png|webp|gif|avif|heic|heif|bmp|tiff?)$/iu.test(nomeArquivo)) {
+        if (!campos.imagemNome) { campos.imagemNome = nomeArquivo; origem.imagemNome = 'Nome de arquivo indicado no texto'; }
         retirar.add(i);
         continue;
       }
       const foto = linhas[i].trim().match(/^!\[([^\]]*)\]\(([^\s)]+)(?:\s+"[^"]*")?\)$/);
       if (!foto) continue;
       if (!campos.imagem) { campos.imagem = foto[2]; origem.imagem = 'Imagem indicada no texto'; }
+      if (!campos.imagemNome && !/^https?:\/\//i.test(foto[2])) { campos.imagemNome = foto[2]; origem.imagemNome = 'Nome de arquivo indicado no texto'; }
       retirar.add(i);
     }
     const disponiveis = () => linhas.map((_, i) => i)
@@ -346,9 +376,11 @@
         const indices = [indice];
         const marcado = /^\s*###\s+/.test(linhas[indice]);
         const destacado = /^(\*{1,3}|_{1,3})\S[^\r\n]*\1$/.test(linhas[indice].trim());
+        const estruturaClima = /(?:imagem\s+anexa|previs[aã]o|temperatura|chuva|nebulosidade|°c)/i.test(texto) ||
+          /(?:CLIMA|SERTÃO|S[AÃ]O FRANCISCO)/i.test(campos.chapeu);
         // O fechamento da ênfase delimita o resumo: não junta os parágrafos
         // seguintes quando o texto chega sem linhas vazias pelo WhatsApp.
-        if (!marcado && !destacado) {
+        if (!marcado && !destacado && !estruturaClima) {
           for (let i = indice + 1; i < inicioCorpo && !retirar.has(i) && linhas[i].trim(); i++) {
             if (/^\s*#/.test(linhas[i]) || !linhaEditorial(i) || tipoAssinatura(i)) break;
             indices.push(i);
@@ -360,7 +392,7 @@
           resumo.length >= 20 && resumo.length <= 360 && !caixaAlta(resumo) && haCorpoDepois;
         const resumoSemRotulo = linhaEditorial(indice) && !/^\s*#/.test(linhas[indice]) &&
           resumo.length >= 20 && resumo.length <= 360 && !caixaAlta(resumo) &&
-          !/[.!?…]$/.test(resumo) && haCorpoDepois;
+          (!/[.!?…]$/.test(resumo) || estruturaClima) && haCorpoDepois;
         if (marcado || resumoDestacado || resumoSemRotulo) {
           campos.bigode = resumo;
           origem.bigode = marcado ? 'Identificado pelo formato' : resumoDestacado
@@ -384,6 +416,12 @@
     // próprio rótulo já foi separado; título, chapéu e bigode anteriores ficam fora.
     campos.redacao = linhas.filter((_, i) => !retirar.has(i) && (!corpoExplicito || i >= inicioCorpo))
       .join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    if (/^https?:\/\//i.test(campos.imagemNome)) {
+      campos.imagem = campos.imagemNome;
+      campos.imagemNome = '';
+      origem.imagem = origem.imagemNome || 'Imagem indicada no texto';
+      delete origem.imagemNome;
+    }
     if (!campos.categoria && !informados.has('categoria')) {
       const assunto = normalizar(campos.titulo + ' ' + campos.chapeu + ' ' + campos.bigode);
       const regras = [
@@ -396,12 +434,23 @@
       const sugestao = regras.find(([, expressao]) => expressao.test(assunto));
       if (sugestao) { campos.categoria = sugestao[0]; origem.categoria = 'Sugestão pelo assunto — confira a categoria do site'; }
     }
+    const assuntoClima = normalizar(campos.titulo + ' ' + campos.chapeu + ' ' + campos.bigode + ' ' + campos.redacao.slice(0, 500));
+    const clima = /previsao|tempo|chuva|temperatura|nebulosidade|clima|°c/.test(assuntoClima);
+    campos.tipoRadar = clima ? 'clima' : (campos.imagemNome || campos.legendaImagem || campos.creditoImagem ? 'noticias' : '');
+    if (clima && !campos.chapeu) { campos.chapeu = 'CLIMA'; origem.chapeu = 'Sugestão pelo assunto climático — confira'; }
+    if (clima && !campos.legendaImagem) campos.legendaImagem = campos.titulo;
+    if (clima && !campos.cidade) {
+      const local = campos.redacao.match(/^\s*([\p{Lu}][\p{L}\s.'’-]{1,80}?)\s+[—–-]\s+/u);
+      const localTitulo = campos.titulo.match(/\bem\s+([\p{Lu}][\p{L}\s.'’-]{1,80})\s*$/u);
+      if (local) { campos.cidade = local[1].trim(); origem.cidade = 'Localidade no início da redação — confira'; }
+      else if (localTitulo) { campos.cidade = localTitulo[1].trim(); origem.cidade = 'Localidade indicada no título — confira'; }
+    }
     if (/^(?:nao (?:informad[oa]|fornecid[oa]|identificad[oa])|sem autor|em branco|ausente|n\/a|[-—])\.?$/.test(normalizar(campos.autor))) {
       campos.autor = ''; delete origem.autor;
     }
     // A revisão e o preenchimento do site recebem o texto sem marcas de ênfase.
     // A redação mantém suas quebras de linha e demais estruturas, como tabelas.
-    for (const campo of ['categoria', 'titulo', 'chapeu', 'bigode', 'redacao', 'autor']) {
+    for (const campo of ['categoria', 'titulo', 'chapeu', 'bigode', 'redacao', 'autor', 'imagemNome', 'legendaImagem', 'creditoImagem', 'tags', 'portais']) {
       campos[campo] = removerEnfase(campos[campo]);
     }
     campos.chapeu = campos.chapeu.trim().toLocaleUpperCase('pt-BR');

@@ -3,9 +3,12 @@
   const dialogo = $('#configuracoes');
   const quadro = $('.coluna-producao iframe');
   const padroes = { tema:'escuro', tamanho:'normal', logsDetalhados:false,
-    confirmacoes:false, pastaVideos:null };
+    confirmacoes:false, pastaVideos:null, buscarFotosAutomaticamente:true,
+    pastaFotos:'G:\\Meu Drive\\Tribuna', fotosClima:{} };
   let preferencias = { ...padroes };
   let versao = '—';
+  let pastaFotosDisponivel = null;
+  let fotoClimaSelecionada = null;
   let fila = Promise.resolve();
   const registros = [];
 
@@ -31,7 +34,47 @@
     $('#config-destino').value = preferencias.pastaVideos ? 'personalizado' : 'downloads';
     $('#config-pasta-atual').textContent = preferencias.pastaVideos || 'Downloads do Windows';
     $('#config-versao').textContent = versao;
+    $('#config-buscar-fotos').checked = preferencias.buscarFotosAutomaticamente !== false;
+    $('#config-pasta-fotos').value = preferencias.pastaFotos || '';
+    $('#config-pasta-fotos-estado').textContent = !preferencias.pastaFotos ? 'Pasta não configurada.'
+      : pastaFotosDisponivel === false ? 'Pasta indisponível neste computador. A matéria ficará com FOTO PENDENTE.'
+      : pastaFotosDisponivel === true ? 'Pasta disponível neste computador.' : 'Configuração local deste computador.';
+    renderizarFotosClima();
     $('#config-info-tecnica').textContent = `AutoXS ${versao} · painel local · tema ${tema} · tamanho ${preferencias.tamanho}.`;
+  }
+  function renderizarFotosClima() {
+    const lista = $('#config-clima-lista');
+    lista.replaceChildren();
+    const entradas = Object.entries(preferencias.fotosClima || {}).sort(([a],[b]) => a.localeCompare(b, 'pt-BR'));
+    if (!entradas.length) { lista.textContent = 'Nenhuma cidade cadastrada.'; return; }
+    for (const [cidade, foto] of entradas) {
+      const item = document.createElement('div'); item.className = 'config-pasta';
+      const texto = document.createElement('span'); texto.textContent = `${cidade} — mídia ${foto.id}${foto.nome ? ` — ${foto.nome}` : ''}`;
+      if (foto.url) { const img=document.createElement('img'); img.src=foto.url; img.alt=`Fotografia padrão de ${cidade}`; img.width=80; img.height=52; img.style.objectFit='cover'; item.append(img); }
+      const excluir = document.createElement('button'); excluir.type='button'; excluir.textContent='Excluir';
+      excluir.addEventListener('click', async () => {
+        if (!await window.confirmarAutoXS(`Excluir a fotografia padrão de ${cidade}?`)) return;
+        const fotosClima={...(preferencias.fotosClima||{})}; delete fotosClima[cidade]; await salvar({fotosClima});
+      });
+      item.append(texto, excluir); lista.append(item);
+    }
+  }
+  function renderizarResultadoFotos(itens) {
+    const lista=$('#config-clima-resultados'); lista.replaceChildren();
+    if (!itens.length) { lista.textContent='Nenhuma fotografia encontrada com esse termo.'; return; }
+    for (const foto of itens) {
+      const botao=document.createElement('button'); botao.type='button'; botao.className='config-foto-opcao';
+      botao.setAttribute('aria-pressed',String(fotoClimaSelecionada?.id===foto.id));
+      if (foto.url) { const imagem=document.createElement('img'); imagem.src=foto.url; imagem.alt=foto.nome||`Mídia ${foto.id}`; botao.append(imagem); }
+      const texto=document.createElement('span'); texto.textContent=`${foto.nome||'Sem nome'} · mídia ${foto.id}`; botao.append(texto);
+      botao.addEventListener('click',()=>{
+        fotoClimaSelecionada=foto;
+        $('#config-clima-id').value=foto.id; $('#config-clima-url').value=foto.url||'';
+        lista.querySelectorAll('button').forEach(item=>item.setAttribute('aria-pressed',String(item===botao)));
+        $('#config-clima-estado').textContent=`Selecionada: ${foto.nome||`mídia ${foto.id}`}.`;
+      });
+      lista.append(botao);
+    }
   }
   async function operacao(pedido) {
     const resposta = await window.configuracoesAutoXS(pedido);
@@ -43,11 +86,14 @@
       try {
         const resposta = await operacao({ acao:'salvar', preferencias:{ ...preferencias, ...alteracoes } });
         preferencias = resposta.preferencias;
+        pastaFotosDisponivel = resposta.pastaFotosDisponivel;
         aplicar();
         informar('Preferências salvas neste computador.');
+        return true;
       } catch (erro) {
         aplicar();
         informar(erro.message, true);
+        return false;
       }
     };
     fila = fila.then(executar);
@@ -74,6 +120,7 @@
   });
   $('#fechar-configuracoes').addEventListener('click', () => dialogo.close());
   dialogo.addEventListener('click', evento => { if (evento.target === dialogo) dialogo.close(); });
+  dialogo.addEventListener('close',()=>{ void operacao({acao:'fecharFotosCms'}).catch(()=>{}); });
   dialogo.querySelectorAll('[data-config-aba]').forEach(botao => botao.addEventListener('click', () => {
     dialogo.querySelectorAll('[data-config-aba]').forEach(item =>
       item.setAttribute('aria-current', String(item === botao)));
@@ -95,12 +142,46 @@
       else aplicar();
     } catch (erro) { aplicar(); informar(erro.message, true); }
   });
+  $('#config-buscar-fotos').addEventListener('change', evento => void salvar({ buscarFotosAutomaticamente:evento.target.checked }));
+  $('#config-escolher-pasta-fotos').addEventListener('click', async () => {
+    try {
+      const resposta = await operacao({ acao:'escolherPastaFotos' });
+      if (resposta.pasta) await salvar({ pastaFotos:resposta.pasta });
+      else aplicar();
+    } catch (erro) { aplicar(); informar(erro.message, true); }
+  });
+  $('#config-clima-buscar').addEventListener('click', async () => {
+    const cidade=$('#config-clima-cidade').value.normalize('NFC').trim();
+    const termo=($('#config-clima-termo').value||cidade).normalize('NFC').trim();
+    if (!cidade) return informar('Informe primeiro a cidade que receberá esta fotografia.',true);
+    const botao=$('#config-clima-buscar'); botao.disabled=true; $('#config-clima-estado').textContent='Consultando o banco do CMS…';
+    try {
+      const resposta=await operacao({acao:'buscarFotosCms',termo});
+      fotoClimaSelecionada=null; renderizarResultadoFotos(resposta.itens||[]);
+      $('#config-clima-estado').textContent=`${(resposta.itens||[]).length} fotografia(s) encontrada(s). Escolha uma miniatura.`;
+    } catch (erro) { $('#config-clima-estado').textContent=erro.message; informar(erro.message,true); }
+    finally { botao.disabled=false; }
+  });
+  $('#config-clima-id').addEventListener('input',()=>{ if (fotoClimaSelecionada?.id!==$('#config-clima-id').value.trim()) fotoClimaSelecionada=null; });
+  $('#config-clima-salvar').addEventListener('click', async () => {
+    const cidade=$('#config-clima-cidade').value.normalize('NFC').trim();
+    const id=$('#config-clima-id').value.trim();
+    const url=$('#config-clima-url').value.trim();
+    if (!cidade || !/^\d+$/.test(id) || (url && !/^https?:\/\//i.test(url))) return informar('Informe cidade, ID numérico real e uma URL válida quando usada.', true);
+    const nome=fotoClimaSelecionada?.id===id ? fotoClimaSelecionada.nome : '';
+    if (!await salvar({ fotosClima:{...(preferencias.fotosClima||{}), [cidade]:{id,url,nome}} })) return;
+    await operacao({acao:'fecharFotosCms'}).catch(()=>{});
+    fotoClimaSelecionada=null;
+    $('#config-clima-cidade').value=''; $('#config-clima-termo').value=''; $('#config-clima-id').value=''; $('#config-clima-url').value='';
+    $('#config-clima-resultados').replaceChildren(); $('#config-clima-estado').textContent='Associação salva neste computador.';
+  });
   $('#restaurar-configuracoes').addEventListener('click', async () => {
     if (!await window.confirmarAutoXS('Restaurar as preferências padrão deste computador?')) return;
     await fila;
     try {
       const resposta = await operacao({ acao:'restaurar' });
       preferencias = resposta.preferencias;
+      pastaFotosDisponivel = resposta.pastaFotosDisponivel;
       aplicar();
       informar('Preferências padrão restauradas.');
     } catch (erro) { informar(erro.message, true); }
@@ -114,6 +195,7 @@
       const resposta = await operacao({ acao:'obter' });
       preferencias = resposta.preferencias;
       versao = resposta.versao;
+      pastaFotosDisponivel = resposta.pastaFotosDisponivel;
       aplicar();
     } catch (erro) { aplicar(); informar(erro.message, true); }
   })();

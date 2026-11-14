@@ -4,6 +4,9 @@ const { chromium } = require('playwright');
 const { criarEnvioAoSite, preencherCampos, formatarData } = require('../preencher-materia');
 const { criarPainelManual } = require('../painel-manual');
 const { textoParaHtml } = require('../texto-para-html');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
 let browser;
 before(async()=>{browser=await chromium.launch({channel:'msedge',headless:true});});
 after(async()=>{await browser?.close();});
@@ -59,11 +62,13 @@ test('categoria sem correspondência não preenche outra por aproximação',asyn
  const m=await contextoMock();
  try{const p=await m.c.newPage();await p.goto(origem+'/news/add');await assert.rejects(preencherCampos(p,{...campos,categoria:'Clima e Tempo'}),/não existe/);assert.equal(await p.locator('#inp_category_id').inputValue(),'');assert.equal(await p.locator('#inp_title').inputValue(),'');}finally{await m.c.close();}
 });
-test('botão envia a revisão atual, impede operação concorrente e orienta o envio manual',async()=>{
+test('botão envia a revisão atual, impede operação concorrente e orienta o envio manual',async t=>{
  const m=await contextoMock();
  try{
+  const pastaCaptura=await fs.mkdtemp(path.join(os.tmpdir(),'autoxs-preencher-fila-'));
+  t.after(()=>fs.rm(pastaCaptura,{recursive:true,force:true}));
   let liberar; const espera=new Promise(r=>{liberar=r;});let chamadas=0;
-  const acao=criarEnvioAoSite(m.c,async()=>true);
+  const acao=criarEnvioAoSite(m.c,async()=>true,undefined,undefined,null,{pastaCaptura});
   const painel=await criarPainelManual(m.c,async()=>{throw Error('Não deve atualizar');},async(dados,log)=>{chamadas++;await espera;return acao(dados,log);});
   const janelaAdicao=m.c.waitForEvent('page');
   await painel.getByRole('button',{name:'Adicionar matérias',exact:true}).click();

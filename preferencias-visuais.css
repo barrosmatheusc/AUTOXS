@@ -48,6 +48,13 @@ html[data-tamanho="ampliado"] #configuracoes { max-height: min(760px, calc((100v
 #config-estado { font-size: 13px; min-height: 1em; }
 #config-registros { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: #101d17; border: 1px solid #456353; border-radius: 8px; font-size: 12px; }
 #configuracoes .config-futuro { margin-top: 20px; padding: 12px; border: 1px dashed #668c77; border-radius: 9px; }
+#configuracoes .config-fotos-grade { display: grid; grid-template-columns: repeat(auto-fill,minmax(130px,1fr)); gap: 10px; margin: 14px 0; }
+#configuracoes .config-foto-opcao { width: 100%; min-width: 0; padding: 8px; display: grid; gap: 7px; background: #182a21; color: #dff5e8; border: 1px solid #456353; text-align: left; }
+#configuracoes .config-foto-opcao img { display: block; width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 7px; background: #0d1813; }
+#configuracoes .config-foto-opcao span { overflow-wrap: anywhere; font-size: 12px; line-height: 1.35; }
+#configuracoes .config-foto-opcao[aria-pressed="true"] { border: 3px solid #a2edc5; padding: 6px; background: #244536; }
+#configuracoes .config-clima-manual { margin: 12px 0; color: #a9c4b5; }
+#configuracoes .config-clima-manual summary { cursor: pointer; margin-bottom: 12px; }
 #dados-previa { margin-top: 14px; padding: 12px; border: 1px solid #668c77; border-radius: 9px; }
 #dados-estado { min-height: 2.5em; padding: 8px 10px; border: 1px solid #456353;
   border-radius: 8px; background: #101d17; overflow-wrap: anywhere; }
@@ -71,6 +78,7 @@ html[data-tema="claro"] :is(.materia-dialog input, .materia-dialog select, #conf
 html[data-tema="claro"] #configuracoes .config-abas button { background: #e3f2e8; color: #163d27; border-color: #9cbea7; }
 html[data-tema="claro"] #configuracoes .config-abas button[aria-current="true"] { background: #356849; color: #fff; }
 html[data-tema="claro"] #abrir-configuracoes { background: #fff; color: #24523a; border-color: #9cbea7; }
+html[data-tema="claro"] #configuracoes .config-foto-opcao { background: #eef5ef; color: #183027; border-color: #9cbea7; }
 html[data-tema="claro"] a, html[data-tema="claro"] .resumo-responsaveis strong { color: #215f3c; }
 html[data-tema="claro"] .aviso { color: #765000; }
 html[data-tema="claro"] .erro { color: #a12020; }

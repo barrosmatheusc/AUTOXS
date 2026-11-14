@@ -2,9 +2,12 @@
   const $ = seletor => document.querySelector(seletor);
   const dialogo = $('#captura-dialogo');
   const estado = $('#captura-estado');
-  const CAMPOS = [['titulo','Título'],['chapeu','Chapéu'],['bigode','Subtítulo'],['redacao','Corpo'],['autor','Autor'],['categoria','Categoria']];
+  const CAMPOS = [['titulo','Título'],['chapeu','Chapéu'],['bigode','Subtítulo'],['redacao','Corpo'],['autor','Autor'],['categoria','Categoria'],
+    ['imagemNome','Nome da fotografia'],['legendaImagem','Legenda da imagem'],['creditoImagem','Crédito da imagem'],['cidade','Cidade (Radar Clima)'],['tags','Tags'],['portais','Portais recomendados']];
   let dados = { mensagens:[], rascunhos:[] };
   let trabalhando = false;
+  let filaDrenagem = Promise.resolve();
+  let filaOperacoes = Promise.resolve();
   const botao = $('#abrir-captura');
   const aviso = texto => { estado.textContent = texto; };
   const el = (tag, texto = '', classe = '') => {
@@ -14,18 +17,50 @@
     if (typeof window.capturaAutoXS !== 'function') throw new Error('Central indisponível. Reinicie o AutoXS para instalar a caixa de entrada.');
     return window.capturaAutoXS({ acao:tipo, ...outros });
   }
-  async function executar(tarefa) {
-    if (trabalhando) return;
-    trabalhando = true; dialogo.setAttribute('aria-busy','true');
-    try { await tarefa(); await carregar(); }
-    catch (erro) { aviso(erro.message || 'Não foi possível concluir a operação. Os dados foram preservados.'); }
-    finally { trabalhando = false; dialogo.removeAttribute('aria-busy'); }
+  function executar(tarefa) {
+    const proxima = filaOperacoes.then(async () => {
+      trabalhando = true; dialogo.setAttribute('aria-busy','true');
+      try { await tarefa(); await carregar(); }
+      catch (erro) { aviso(erro.message || 'Não foi possível concluir a operação. Os dados foram preservados.'); }
+      finally { trabalhando = false; dialogo.removeAttribute('aria-busy'); }
+    });
+    filaOperacoes = proxima.catch(() => {});
+    return proxima;
   }
   async function carregar() {
     dados = await acao('listar');
     renderizar();
     if (dados.avisoRecuperacao) aviso(dados.avisoRecuperacao);
   }
+  function drenarFila() {
+    const executarDrenagem = async () => {
+      if (typeof window.receberRascunhoCaptura !== 'function') return;
+      try {
+      const atual = await acao('listar');
+      for (const rascunho of atual.rascunhos.filter(item => item.status === 'aprovado' || item.status === 'na-fila')) {
+        const pacote = await acao('prepararEncaminhamento',{id:rascunho.id});
+        const resposta = window.receberRascunhoCaptura(pacote);
+        if (!resposta?.ok) { if (rascunho.status === 'aprovado') await acao('marcarEstado',{id:rascunho.id,status:'na-fila',motivo:resposta?.mensagem||'Aguardando quadro livre.'}); break; }
+        await acao('marcarEstado',{id:rascunho.id,status:'encaminhado',motivo:`Carregada no quadro ${resposta.espaco}.`});
+      }
+        await carregar();
+      } catch (erro) { aviso(erro.message || 'A fila automática foi preservada para nova tentativa.'); }
+    };
+    const resultado=filaDrenagem.then(executarDrenagem);
+    filaDrenagem=resultado.catch(()=>{});
+    return resultado;
+  }
+  window.drenarFilaCaptura = drenarFila;
+  window.aguardarFilaCaptura = async () => {
+    // Espera inclusive operações que tenham sido enfileiradas enquanto a
+    // anterior terminava. Útil ao recarregar o painel e evita observar um
+    // estado intermediário entre aprovação e entrega ao quadro.
+    for (;;) {
+      const operacoes=filaOperacoes, drenagens=filaDrenagem;
+      await Promise.all([operacoes,drenagens]);
+      if (operacoes===filaOperacoes && drenagens===filaDrenagem) return;
+    }
+  };
   function fotoInfo(id) { return dados.mensagens.flatMap(item => item.fotos).find(foto => foto.id === id); }
   async function miniatura(id, destino) {
     try { const img = document.createElement('img'); img.alt = fotoInfo(id)?.nome || 'Foto anexada'; img.src = await acao('foto',{ id }); destino.append(img); }
@@ -81,16 +116,19 @@
         await salvarCampos(); aviso('Correções salvas.');
       })); botoes.append(salvar);
       if (r.ambiguo) { const confirmar=el('button','Confirmar agrupamento'); confirmar.type='button'; confirmar.addEventListener('click',() => executar(async () => { await salvarCampos(); await acao('confirmarGrupo',{id:r.id}); aviso('Campos salvos e agrupamento confirmado por você.'); })); botoes.append(confirmar); }
-      const aprovar=el('button','Aprovar rascunho'); aprovar.type='button'; aprovar.addEventListener('click',() => executar(async () => { await salvarCampos(); await acao('aprovar',{id:r.id}); aviso('Rascunho aprovado. Use Encaminhar para carregar em um quadro livre.'); })); botoes.append(aprovar);
+      const aprovar=el('button','Aprovar rascunho'); aprovar.type='button'; aprovar.addEventListener('click',() => {
+        void executar(async () => { await salvarCampos(); await acao('aprovar',{id:r.id}); aviso('Rascunho aprovado. A fila procurará um quadro livre.'); })
+          .then(()=>drenarFila());
+      }); botoes.append(aprovar);
       const outros=dados.rascunhos.filter(item=>item.id!==r.id && item.status==='revisao');
       if(outros.length) { const seletor=document.createElement('select'); seletor.append(new Option('Juntar com...','')); for(const outro of outros) seletor.append(new Option(outro.campos.titulo||'Sem título',outro.id)); botoes.append(seletor); const juntar=el('button','Juntar'); juntar.type='button'; juntar.addEventListener('click',() => executar(async () => { if(!seletor.value) throw new Error('Escolha outro rascunho.'); await acao('juntar',{ids:[r.id,seletor.value]}); aviso('Mensagens reunidas. Confira os campos conflitantes.'); })); botoes.append(juntar); }
       cartao.append(botoes);
     }
-    if(r.status==='aprovado' || r.status==='encaminhado') { const encaminhar=el('button',r.status==='encaminhado' ? 'Reabrir em quadro livre' : 'Encaminhar para quadro livre'); encaminhar.type='button'; encaminhar.addEventListener('click',() => executar(async () => {
-      const mensagens=r.mensagemIds.map(id=>dados.mensagens.find(item=>item.id===id)).filter(Boolean);
-      const resposta=window.receberRascunhoCaptura({ ...r, mensagens, fotoNome:fotoInfo(r.fotoId)?.nome });
+    if(['aprovado','na-fila','encaminhado','aguardando-fotografia'].includes(r.status)) { const encaminhar=el('button',r.status==='encaminhado' ? 'Reabrir em quadro livre' : 'Encaminhar para quadro livre'); encaminhar.type='button'; encaminhar.addEventListener('click',() => executar(async () => {
+      const pacote=await acao('prepararEncaminhamento',{id:r.id});
+      const resposta=window.receberRascunhoCaptura(pacote);
       if(!resposta?.ok) throw new Error(resposta?.mensagem||'Nenhum quadro disponível.');
-      if(r.status==='aprovado') await acao('marcarEncaminhado',{id:r.id});
+      if(r.status!=='encaminhado') await acao('marcarEstado',{id:r.id,status:'encaminhado',motivo:`Carregada no quadro ${resposta.espaco}.`});
       aviso(`Matéria carregada no quadro ${resposta.espaco}. Confira antes de usar Enviar matéria ao site.`);
     })); cartao.append(encaminhar); }
     if(r.status!=='encaminhado' && r.status!=='descartado') { const descartar=el('button','Descartar rascunho'); descartar.type='button'; descartar.addEventListener('click',() => {
@@ -107,7 +145,10 @@
     for (const r of visiveis) fila.append(renderizarRascunho(r));
     if(!visiveis.length) fila.append(el('p','Nenhum rascunho ainda. Guarde mensagens e clique em Organizar.'));
   }
-  botao.addEventListener('click',() => { dialogo.showModal(); executar(async()=>{ await carregar(); }); });
+  botao.addEventListener('click',() => {
+    dialogo.showModal();
+    void executar(async()=>{}).then(()=>drenarFila());
+  });
   $('#fechar-captura').addEventListener('click',() => dialogo.close());
   $('#captura-fotos').addEventListener('change',evento => {
     const destino=$('#captura-previa-arquivos'); destino.replaceChildren();
@@ -121,4 +162,8 @@
     aviso(`${resposta.novas.length} mensagem(ns) guardada(s). ${resposta.duplicatas.length} duplicata(s) ignorada(s).`);
   }));
   $('#organizar-captura').addEventListener('click',() => executar(async()=>{ const resposta=await acao('organizar'); aviso(`${resposta.criados} rascunho(s) criado(s). Confira os agrupamentos antes de aprovar.`); }));
+  // Ao reabrir o AutoXS, retoma automaticamente os itens aprovados que
+  // ficaram na fila. Neste ponto adicionar-materias.js já instalou os quatro
+  // quadros e receberRascunhoCaptura, pois ele é carregado antes deste script.
+  setTimeout(()=>void drenarFila(),0);
 })();

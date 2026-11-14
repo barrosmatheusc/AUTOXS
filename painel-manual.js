@@ -15,7 +15,7 @@ const { identificarInstalacao } = require('./instalacao-autoxs');
 const { salvarExportacao } = require('./dados-transferencia-arquivo');
 const { carregarIntegracaoLocal } = require('./integracao-local');
 
-async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao = criarGrupoJanelas(context), historico = null, compartilhamentoExterno = null, buscadorLinks = null, geradorMateriasExterno = null, processadorVideosExterno = null, integracaoLocal = carregarIntegracaoLocal()) {
+async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao = criarGrupoJanelas(context), historico = null, compartilhamentoExterno = null, buscadorLinks = null, geradorMateriasExterno = null, processadorVideosExterno = null, integracaoLocal = carregarIntegracaoLocal(), seletorFotosCms = null) {
   const painel = context.pages().find(p => p.url() === 'about:blank') || await context.newPage();
   const url = pathToFileURL(path.join(__dirname, 'painel-manual.html')).href;
   const urlAdicao = pathToFileURL(path.join(__dirname, 'adicionar-painel.html')).href;
@@ -46,10 +46,27 @@ async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao 
     if (frame !== painel.mainFrame() || frame.url() !== url)
       return { ok:false, mensagem:'Abra o painel local do AutoXS.' };
     try {
-      if (pedido.acao === 'obter')
-        return { ok:true, preferencias:await preferencias.ler(), versao:versaoAutoXS };
+      if (pedido.acao === 'obter') {
+        const atuais=await preferencias.ler();
+        const pastaFotosDisponivel=Boolean((await fs.stat(atuais.pastaFotos).catch(()=>null))?.isDirectory());
+        return { ok:true, preferencias:atuais, versao:versaoAutoXS, pastaFotosDisponivel };
+      }
       if (pedido.acao === 'escolherPasta')
         return { ok:true, pasta:await escolherPastaWindows() };
+      if (pedido.acao === 'escolherPastaFotos')
+        return { ok:true, pasta:await escolherPastaWindows() };
+      if (pedido.acao === 'buscarFotosCms') {
+        if (!seletorFotosCms) return {ok:false,mensagem:'O seletor do banco de imagens não está disponível nesta execução.'};
+        const termo=String(pedido.termo||'').normalize('NFC').trim().slice(0,180);
+        const resultado=await seletorFotosCms.buscar(termo);
+        if (!resultado?.ok) return resultado;
+        if (!painel.isClosed()) await painel.bringToFront().catch(()=>{});
+        return resultado;
+      }
+      if (pedido.acao === 'fecharFotosCms') {
+        await seletorFotosCms?.encerrar?.();
+        return {ok:true};
+      }
       if (pedido.acao !== 'salvar' && pedido.acao !== 'restaurar')
         return { ok:false, mensagem:'Operação de configuração inválida.' };
       const novas = pedido.acao === 'restaurar'
@@ -61,7 +78,8 @@ async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao 
             await geradorVideos.evaluate(valor => window.atualizarPastaVideos?.(valor), pasta).catch(() => {});
         } catch { /* A preferência salva será usada na próxima abertura do módulo. */ }
       }
-      return { ok:true, preferencias:novas };
+      const pastaFotosDisponivel=Boolean((await fs.stat(novas.pastaFotos).catch(()=>null))?.isDirectory());
+      return { ok:true, preferencias:novas, pastaFotosDisponivel };
     } catch (erro) { return { ok:false, mensagem:erro.message || 'Não foi possível salvar as configurações.' }; }
   });
 
@@ -374,6 +392,7 @@ async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao 
     });
     painel.on('close', encerrar);
   }
+  painel.on('close', () => { void seletorFotosCms?.encerrar?.(); });
   await painel.bringToFront();
   return painel;
 }

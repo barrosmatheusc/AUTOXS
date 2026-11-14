@@ -4,7 +4,8 @@ const { randomUUID, createHash } = require('node:crypto');
 const { identificarMateria } = require('./identificar-materia');
 
 const PASTA_PADRAO = path.join(__dirname, 'work', 'captura-materias');
-const CAMPOS = ['titulo', 'chapeu', 'bigode', 'redacao', 'autor', 'categoria'];
+const CAMPOS = ['titulo', 'chapeu', 'bigode', 'redacao', 'autor', 'categoria', 'imagemNome',
+  'legendaImagem', 'creditoImagem', 'tags', 'portais', 'tipoRadar', 'cidade'];
 const MAX_TEXTO = 120000;
 const MAX_FOTO = 12 * 1024 * 1024;
 const TIPOS = { jpeg:'image/jpeg', png:'image/png', webp:'image/webp', gif:'image/gif' };
@@ -29,6 +30,41 @@ function validarEstado(estado) {
 function separarMensagens(texto, agora) {
   const original = String(texto || '').replace(/\r\n?/g, '\n');
   if (!original.trim()) return [];
+  const recebidoEm = new Date(agora).toISOString();
+  // Radar de Notícias: os delimitadores explícitos são soberanos e impedem
+  // que metadados ou parágrafos de matérias vizinhas sejam misturados.
+  const delimitador = /^\s*(?:#{1,6}\s*)?(IN[IÍ]CIO|FIM)\s+DA\s+MAT[EÉ]RIA\s+(\d+)\s*$/i;
+  const linhasOriginais = original.split('\n');
+  const blocosEditoriais = [];
+  let bloco = null;
+  for (const linha of linhasOriginais) {
+    const marca = linha.match(delimitador);
+    if (marca?.[1].toLocaleUpperCase('pt-BR').startsWith('IN')) {
+      if (bloco) throw new Error(`A matéria ${bloco.numero} não possui marcador de fim antes da próxima matéria.`);
+      bloco = { numero:marca[2], linhas:[] }; continue;
+    }
+    if (marca?.[1].toLocaleUpperCase('pt-BR') === 'FIM') {
+      if (!bloco || bloco.numero !== marca[2]) throw new Error(`Marcadores de início e fim da matéria ${marca[2]} não correspondem.`);
+      blocosEditoriais.push(bloco.linhas.join('\n').trim()); bloco = null; continue;
+    }
+    if (bloco) bloco.linhas.push(linha);
+  }
+  if (bloco) throw new Error(`A matéria ${bloco.numero} não possui marcador de fim.`);
+  if (blocosEditoriais.length) return blocosEditoriais.filter(Boolean).map(parte => ({ textoOriginal:parte, texto:parte,
+    remetente:'', horarioInformado:'', recebidoEm }));
+  // Radar Clima: cada notícia termina com a referência de sua própria foto.
+  const marcadoresFoto = linhasOriginais.filter(linha => /^\s*(?:imagem\s+anexa|imagem\s+de\s+destaque\s+sugerida)\s*:/i.test(linha)).length;
+  if (marcadoresFoto > 1) {
+    const partes=[]; let atual=[];
+    for (const linha of linhasOriginais) {
+      atual.push(linha);
+      if (/^\s*(?:imagem\s+anexa|imagem\s+de\s+destaque\s+sugerida)\s*:/i.test(linha)) {
+        const parte=atual.join('\n').trim(); if (parte) partes.push(parte); atual=[];
+      }
+    }
+    if (atual.join('').trim()) partes[partes.length - 1] += '\n' + atual.join('\n');
+    return partes.map(parte => ({ textoOriginal:parte, texto:parte, remetente:'', horarioInformado:'', recebidoEm }));
+  }
   const linhas = original.split('\n');
   const blocos = [];
   let atual = null;
@@ -65,11 +101,11 @@ function separarMensagens(texto, agora) {
     return grupos.map(parte => ({ ...item, textoOriginal:parte, texto:parte }));
   });
   return separados.filter(item => item.texto.trim()).map(item => ({ ...item,
-    recebidoEm:new Date(agora).toISOString() }));
+    recebidoEm }));
 }
 function identificar(texto, agora) {
   try { return identificarMateria(texto, new Date(agora)).campos; }
-  catch { return { titulo:'', chapeu:'', bigode:'', redacao:'', autor:'', categoria:'' }; }
+  catch { return Object.fromEntries(CAMPOS.map(campo => [campo, ''])); }
 }
 function camposDe(mensagens, agora) {
   const texto = mensagens.map(item => item.texto).join('\n\n');
@@ -77,7 +113,7 @@ function camposDe(mensagens, agora) {
   return Object.fromEntries(CAMPOS.map(campo => [campo, String(identificado[campo] || '')]));
 }
 function rotulosDesconhecidos(mensagens) {
-  const conhecidos = /^(?:t[ií]tulo|chap[eé]u|subt[ií]tulo|bigode|reda[çc][aã]o|corpo|texto|autor|categoria|data|imagem(?: destaque)?|foto|fonte|cr[eé]ditos?)$/i;
+  const conhecidos = /^(?:t[ií]tulo|chap[eé]u|subt[ií]tulo|bigode|reda[çc][aã]o|corpo|texto|autor|autoria|categoria(?: sugerida)?|data|imagem(?: de)?(?: destaque)?(?: sugerida)?|imagem anexa|foto|fonte|legenda da imagem|cr[eé]ditos?(?:\/origem da imagem| da imagem)?|tags|portal(?:\(is\))? recomendado(?:\(s\))?)$/i;
   return [...new Set(mensagens.flatMap(item => item.texto.split('\n'))
     .map(linha => /^\s*([\p{L} ]{2,30})\s*:/u.exec(linha)?.[1]?.trim())
     .filter(rotulo => rotulo && !conhecidos.test(rotulo)))];
@@ -232,11 +268,57 @@ function criarCapturaMaterias(pasta = PASTA_PADRAO, relogio = () => new Date()) 
       return { criados:ids.length, ids };
     });
   }
-  async function listar() { return ler(); }
+  async function importarLote(entrada) {
+    if (typeof entrada?.texto !== 'string' || !entrada.texto.trim() || entrada.texto.length > MAX_TEXTO)
+      throw new Error('Cole uma ou mais matérias, com até 120 mil caracteres.');
+    const partes = separarMensagens(entrada.texto, relogio()).filter(item => item.texto.trim());
+    if (!partes.length) throw new Error('Não foi possível encontrar uma matéria no texto colado.');
+    return alterar(estado => {
+      const ids = [], duplicatas = [];
+      for (const parte of partes) {
+        const assinatura = hash(parte.texto);
+        const existente = estado.mensagens.find(item => item.assinatura === assinatura && !item.descartada);
+        if (existente) { duplicatas.push(existente.rascunhoId || existente.id); continue; }
+        const mensagemId = randomUUID(), rascunhoId = randomUUID();
+        const campos = identificar(parte.texto, agora());
+        estado.mensagens.push({ id:mensagemId, metodo:'colar', origem:String(entrada.origem || 'E-mail colado no Adicionar Matérias').slice(0, 200),
+          identificadorExterno:'', texto:parte.texto, textoOriginal:parte.textoOriginal,
+          recebidoEm:parte.recebidoEm, horarioInformado:parte.horarioInformado,
+          remetente:parte.remetente, fotos:[], assinatura, duplicataPossivel:null,
+          rascunhoId, descartada:false });
+        estado.rascunhos.push({ id:rascunhoId, mensagemIds:[mensagemId], campos,
+          fotoId:null, ambiguo:false, rotulosDesconhecidos:rotulosDesconhecidos([parte]),
+          status:'na-fila', criadoEm:agora(), atualizadoEm:agora(),
+          motivo:(!campos.titulo || !campos.redacao) ? 'Confira os campos ausentes antes de preencher o CMS.' : '' });
+        ids.push(rascunhoId);
+      }
+      return { identificadas:partes.length, novas:ids.length, ids, duplicatas };
+    });
+  }
+  function analisarLote(entrada) {
+    if (typeof entrada?.texto !== 'string' || !entrada.texto.trim() || entrada.texto.length > MAX_TEXTO)
+      throw new Error('Cole uma ou mais matérias, com até 120 mil caracteres.');
+    const partes = separarMensagens(entrada.texto, relogio()).filter(item => item.texto.trim());
+    if (!partes.length) throw new Error('Não foi possível encontrar uma matéria no texto colado.');
+    return { quantidade:partes.length, materias:partes.map(parte => ({
+      texto:parte.texto, textoOriginal:parte.textoOriginal,
+      resultado:identificarMateria(parte.texto, relogio())
+    })) };
+  }
+  async function listar() {
+    // Aguarda qualquer gravação em andamento. Assim o painel nunca recebe um
+    // estado anterior enquanto a distribuição automática muda na-fila para
+    // encaminhado.
+    await fila;
+    return ler();
+  }
   async function atualizar(id, alteracoes) {
     return alterar(estado => {
-      const rascunho = estado.rascunhos.find(item => item.id === id && item.status !== 'descartado');
-      if (!rascunho) throw new Error('Rascunho não encontrado.');
+      // Só o cartão em revisão aceita edição. Um evento atrasado da interface
+      // não pode devolver para revisão um rascunho que já foi aprovado ou
+      // encaminhado a um quadro.
+      const rascunho = estado.rascunhos.find(item => item.id === id && item.status === 'revisao');
+      if (!rascunho) throw new Error('Rascunho em revisão não encontrado.');
       if (!alteracoes || CAMPOS.some(campo => alteracoes[campo] !== undefined &&
           (typeof alteracoes[campo] !== 'string' || alteracoes[campo].length > MAX_TEXTO)))
         throw new Error('Campos de revisão inválidos.');
@@ -325,6 +407,32 @@ function criarCapturaMaterias(pasta = PASTA_PADRAO, relogio = () => new Date()) 
       return structuredClone(rascunho);
     });
   }
+  async function marcarEstado(id, status, motivo = '') {
+    const permitidos = new Set(['aprovado','na-fila','encaminhado','liberada','preenchendo','preenchida','aguardando-fotografia','aguardando-revisao','publicacao-nao-confirmada','publicada']);
+    if (!permitidos.has(status)) throw new Error('Estado de rascunho inválido.');
+    return alterar(estado => {
+      const rascunho = estado.rascunhos.find(item => item.id === id && item.status !== 'descartado');
+      if (!rascunho) throw new Error('Rascunho não encontrado.');
+      rascunho.status = status; rascunho.motivo = String(motivo || '').slice(0, 500); rascunho.atualizadoEm = agora();
+      return structuredClone(rascunho);
+    });
+  }
+  async function prepararEncaminhamento(id) {
+    const estado = await ler();
+    const rascunho = estado.rascunhos.find(item => item.id === id && ['revisao','aprovado','encaminhado','na-fila'].includes(item.status));
+    if (!rascunho) throw new Error('Rascunho disponível não encontrado.');
+    const mensagens = rascunho.mensagemIds.map(mensagemId => estado.mensagens.find(item => item.id === mensagemId)).filter(Boolean);
+    let fotoCaminho = null, fotoNome = null;
+    if (rascunho.fotoId) {
+      const foto = estado.mensagens.flatMap(item => item.fotos).find(item => item.id === rascunho.fotoId);
+      if (!foto) throw new Error('A fotografia associada não existe mais na caixa de entrada.');
+      const caminho = path.join(pastaFotos, `${foto.id}.${foto.tipo}`);
+      const bytes = await fs.readFile(caminho);
+      if (hash(bytes) !== foto.id) throw new Error('Arquivo de fotografia danificado.');
+      fotoCaminho = caminho; fotoNome = foto.nome;
+    }
+    return { ...structuredClone(rascunho), mensagens:structuredClone(mensagens), fotoCaminho, fotoNome };
+  }
   async function descartar(id) {
     return alterar(estado => {
       const rascunho = estado.rascunhos.find(item => item.id === id && item.status !== 'encaminhado');
@@ -342,8 +450,8 @@ function criarCapturaMaterias(pasta = PASTA_PADRAO, relogio = () => new Date()) 
     if (hash(bytes) !== foto.id) throw new Error('Arquivo de fotografia danificado.');
     return `data:${TIPOS[foto.tipo]};base64,${bytes.toString('base64')}`;
   }
-  return { receber, organizar, listar, atualizar, juntar, separar, associarFoto,
-    confirmarGrupo, aprovar, marcarEncaminhado, descartar, obterFoto };
+  return { receber, organizar, analisarLote, importarLote, listar, atualizar, juntar, separar, associarFoto,
+    confirmarGrupo, aprovar, marcarEncaminhado, marcarEstado, prepararEncaminhamento, descartar, obterFoto };
 }
 
 module.exports = { criarCapturaMaterias, separarMensagens, proporGrupos, PASTA_PADRAO };

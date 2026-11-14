@@ -2,8 +2,15 @@
   const grade = document.querySelector('#grade-materias');
   const modelo = document.querySelector('#modelo-editor-materia');
   const botaoAdicionar = document.querySelector('#adicionar-mais');
+  const resumoLote = document.querySelector('#resumo-lote');
   const editoresAbertos = new Map();
   const editoresFechados = new Map();
+  let filaDrenagem = Promise.resolve();
+  async function acaoFila(acao, outros = {}) {
+    if (typeof window.capturaAutoXS !== 'function') throw new Error('Reinicie o AutoXS para carregar a fila persistente.');
+    return window.capturaAutoXS({ acao, ...outros });
+  }
+  function escreverResumo(texto) { if (resumoLote) resumoLote.textContent = texto; }
   function atualizarGrade() {
     grade.dataset.quantidade = String(editoresAbertos.size);
     botaoAdicionar.disabled = editoresAbertos.size >= 4;
@@ -53,8 +60,8 @@
   window.exibirProgressoEnvio = (espaco, mensagem) => editoresAbertos.get(espaco)?.progresso(mensagem);
   // Recebe somente rascunhos aprovados; o envio ao CMS continua em seu botão próprio.
   window.receberRascunhoCaptura = rascunho => {
-    if (!['aprovado','encaminhado'].includes(rascunho?.status) || !rascunho.campos?.titulo?.trim())
-      return { ok: false, mensagem: 'Aprove e confira o rascunho antes de encaminhar.' };
+    if (!['revisao','aprovado','na-fila','encaminhado'].includes(rascunho?.status) || !rascunho?.campos)
+      return { ok: false, mensagem: 'Este rascunho não está disponível para revisão.' };
     const carregado = [...editoresAbertos.entries()].find(([, editor]) => editor.temCaptura(rascunho.id));
     if (carregado) return { ok: true, espaco: carregado[0], reutilizada: true };
     if ([...editoresFechados.values()].some(editor => editor.temCaptura(rascunho.id)))
@@ -68,6 +75,37 @@
     livre[1].carregarCaptura(rascunho);
     return { ok: true, espaco: livre[0] };
   };
+  async function executarDrenagem() {
+    try {
+      const estado = await acaoFila('listar');
+      const pendentes = estado.rascunhos.filter(item => ['revisao','aprovado','na-fila','encaminhado'].includes(item.status));
+      let distribuidas = 0;
+      for (const item of pendentes) {
+        const preparado = await acaoFila('prepararEncaminhamento', { id:item.id });
+        const resposta = window.receberRascunhoCaptura(preparado);
+        if (!resposta?.ok) break;
+        if (!resposta.reutilizada) {
+          distribuidas++;
+          if (item.status !== 'encaminhado') await acaoFila('marcarEstado', { id:item.id, status:'encaminhado', motivo:'Distribuída automaticamente para revisão em um painel.' });
+        }
+      }
+      const atual = await acaoFila('listar');
+      const aguardando = atual.rascunhos.filter(item => ['revisao','aprovado','na-fila','encaminhado'].includes(item.status) &&
+        ![...editoresAbertos.values()].some(editor => editor.temCaptura(item.id))).length;
+      const ocupados = [...editoresAbertos.values()].filter(editor => !editor.vazio()).length;
+      escreverResumo(`${ocupados} painel(is) ocupado(s) · ${aguardando} matéria(s) aguardando na fila.`);
+      return { distribuidas, aguardando };
+    } catch (erro) {
+      escreverResumo(erro.message || 'A fila persistente não pôde ser atualizada.');
+      return { distribuidas:0, aguardando:0, erro };
+    }
+  }
+  function drenarFilaInterna() {
+    const proxima = filaDrenagem.then(executarDrenagem);
+    filaDrenagem = proxima.catch(() => {});
+    return proxima;
+  }
+  window.drenarFilaCaptura = drenarFilaInterna;
   botaoAdicionar.addEventListener('click', adicionarEspaco);
   document.querySelector('#voltar-painel').addEventListener('click', async () => {
     try { await window.voltarAoPainel(); }
@@ -87,7 +125,9 @@
   const botaoFechar = $('#fechar-espaco');
   botaoFechar.setAttribute('aria-label', 'Fechar quadro da matéria ' + espaco);
   botaoFechar.addEventListener('click', () => fecharEspaco(espaco));
-  const campos = [['categoria','Categoria'], ['data','Data de publicação'], ['titulo','Título'], ['chapeu','Chapéu'], ['bigode','Bigode'], ['autor','Autor'], ['imagem','Imagem destaque'], ['redacao','Redação']];
+  const campos = [['categoria','Categoria'], ['data','Data de publicação'], ['titulo','Título'], ['chapeu','Chapéu'], ['bigode','Bigode'], ['autor','Autor'],
+    ['imagemNome','Nome da fotografia'], ['legendaImagem','Legenda da imagem'], ['creditoImagem','Crédito da imagem'], ['cidade','Cidade (Radar Clima)'], ['portais','Portais recomendados'], ['tags','Tags'],
+    ['imagem','Situação da imagem'], ['redacao','Redação']];
   const editores = new Map();
   const normalizar = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
   let enviando = false, carregandoCategorias = false, analisandoGemini = false;
@@ -103,14 +143,17 @@
     if (!vazio()) throw new Error('Este quadro já contém uma matéria.');
     const originais = (rascunho.mensagens || []).map(item => item.textoOriginal).join('\n\n');
     const texto = originais || Object.values(rascunho.campos).join('\n');
-    const foto = rascunho.fotoNome ? `Foto anexada à Central: ${rascunho.fotoNome}. Escolha-a manualmente no CMS.` : '';
+    const foto = rascunho.fotoCaminho ? `Foto pronta para envio: ${rascunho.fotoNome || rascunho.campos.imagemNome || 'arquivo associado'}.` :
+      (rascunho.campos.imagemNome ? `Fotografia esperada: ${rascunho.campos.imagemNome}.` : '');
     bruto.value = texto;
-    materiaAtual = { id: crypto.randomUUID(), capturaId:rascunho.id, texto, textoIdentificado: texto,
-      campos: { categoria: '', data: '', titulo: '', chapeu: '', bigode: '', autor: '', imagem: foto,
-        redacao: '', ...rascunho.campos }, origem: {} };
-    for (const chave of Object.keys(materiaAtual.campos)) materiaAtual.origem[chave] = 'Revisado na Central de Captura';
+    const camposRascunho = { categoria: '', data: '', titulo: '', chapeu: '', bigode: '', autor: '',
+      imagemNome:'', legendaImagem:'', creditoImagem:'', portais:'', tags:'', tipoRadar:'', cidade:'', redacao: '', ...rascunho.campos };
+    camposRascunho.imagem ||= foto;
+    materiaAtual = { id: rascunho.id, capturaId:rascunho.id, fotoCaminho:rascunho.fotoCaminho || null, texto, textoIdentificado: texto,
+      campos: camposRascunho, origem: {} };
+    for (const chave of Object.keys(materiaAtual.campos)) materiaAtual.origem[chave] = 'Identificado no e-mail colado';
     abrirRevisao();
-    mostrarEstado('Rascunho da Central carregado. Confira os campos e selecione a foto manualmente no CMS.', 'concluido');
+    mostrarEstado(rascunho.fotoCaminho ? 'Rascunho carregado com a fotografia associada. Confira os campos antes de preencher o CMS.' : 'Rascunho carregado. Se houver nome de fotografia, o AutoXS tentará encontrá-la na pasta configurada.', 'concluido');
     raiz.focus();
   }
   function mostrarEstado(mensagem, estado = 'informacao') {
@@ -312,9 +355,28 @@
     trechos.hidden = !materiaAtual.descartados?.length; trechos.open = false;
     $('#descartados-ia').textContent = (materiaAtual.descartados || []).join('\n\n');
   }
-  $('#identificar-campos').addEventListener('click', () => {
+  $('#identificar-campos').addEventListener('click', async () => {
     if (ocupado()) { informarOcupacao(); return; }
     try {
+      if (typeof window.capturaAutoXS === 'function') {
+        if (!bruto.value.trim()) throw new Error('Cole uma ou mais matérias para identificar.');
+        mostrarEstado('Identificando o conteúdo colado…', 'carregando');
+        const analise = await acaoFila('analisarLote', { entrada:{ texto:bruto.value } });
+        if (analise.quantidade === 1) {
+          const unica = analise.materias[0];
+          materiaAtual = { id:crypto.randomUUID(), texto:bruto.value, textoIdentificado:bruto.value, ...unica.resultado };
+          abrirRevisao();
+          mostrarEstado('Matéria identificada neste painel. Confira os campos antes de preencher o CMS.', 'concluido');
+          return;
+        }
+        mostrarEstado(`Separando e distribuindo ${analise.quantidade} matérias…`, 'carregando');
+        const resultado = await acaoFila('importarLote', { entrada:{ texto:bruto.value, origem:'E-mail colado no Adicionar Matérias' } });
+        if (!resultado.novas) throw new Error('Estas matérias já estão nos painéis ou na fila. Nenhum registro foi duplicado.');
+        iniciarNovaMateria({ focar:false });
+        const distribuicao = await drenarFilaInterna();
+        mostrarEstado(`${resultado.novas} matéria(s) identificada(s); ${distribuicao.distribuidas} distribuída(s) agora e ${distribuicao.aguardando} aguardando na fila.`, 'concluido');
+        return;
+      }
       const resultado = window.IdentificadorMateria.identificarMateria(bruto.value);
       materiaAtual = { id: crypto.randomUUID(), texto: bruto.value, textoIdentificado: bruto.value, ...resultado }; abrirRevisao();
       mostrarEstado('Campos identificados. Confira a revisão abaixo.', 'concluido');
@@ -387,8 +449,15 @@
     botaoEnvio.textContent = 'Preenchendo no site…'; exibirProgresso('Aguardando o preenchimento desta matéria…');
     let mensagemSucesso = '';
     try {
-      const resposta = await window.enviarMateriaAoSite({espaco,id:materiaAtual.id,campos:{...materiaAtual.campos}});
+      const resposta = await window.enviarMateriaAoSite({espaco,id:materiaAtual.id,campos:{...materiaAtual.campos},
+        fotoCaminho:materiaAtual.fotoCaminho || null, capturaId:materiaAtual.capturaId || null});
       if (resposta?.ok !== true) throw new Error(resposta?.mensagem || 'O preenchimento no site não foi confirmado.');
+      if (materiaAtual.capturaId && typeof window.capturaAutoXS === 'function') {
+        const fotoPendente = ['foto-pendente','sem-foto-automatica'].includes(resposta.foto?.estado) && Boolean(materiaAtual.campos.imagemNome || materiaAtual.fotoCaminho);
+        await window.capturaAutoXS({acao:'marcarEstado',id:materiaAtual.capturaId,
+          status:fotoPendente?'aguardando-fotografia':'preenchida',
+          motivo:fotoPendente?'Formulário preenchido; fotografia requer revisão manual.':'Formulário preenchido; publicação continua manual.'});
+      }
       mensagemSucesso = (resposta.reutilizada ? 'A aba já preenchida foi reaberta.' : 'Matéria preenchida no site.') + ' Este quadro está pronto para uma nova matéria. A publicação final continua sendo feita por você no site.' + (resposta.avisos?.length ? ' ' + resposta.avisos.join(' ') : '');
     } catch (erro) {
       exibirProgresso(erro.message || 'Não foi possível preencher. Confira a aba do site.');
@@ -400,6 +469,7 @@
       // matéria estiver sendo digitada enquanto o site termina o preenchimento.
       iniciarNovaMateria({ focar: raiz.contains(document.activeElement) });
       mostrarEstado(mensagemSucesso, 'concluido');
+      setTimeout(() => void window.drenarFilaCaptura?.(), 0);
     }
   });
   continuar.addEventListener('click', () => { if (!ocupado()) abrirRevisao(); });
@@ -417,9 +487,14 @@
     entrada.querySelector('.miolo').scrollTop = 0;
     if (focar) bruto.focus();
   }
-  $('#nova-materia').addEventListener('click', () => {
+  $('#nova-materia').addEventListener('click', async () => {
     if (ocupado()) return;
+    if (materiaAtual.capturaId && typeof window.capturaAutoXS === 'function') {
+      try { await acaoFila('marcarEstado', { id:materiaAtual.capturaId, status:'liberada', motivo:'Quadro liberado explicitamente pelo operador.' }); }
+      catch (erro) { $('#recado-revisao').textContent = erro.message || 'Não foi possível liberar esta matéria da fila.'; return; }
+    }
     iniciarNovaMateria();
+    setTimeout(() => void drenarFilaInterna(), 0);
   });
   $('#voltar-texto').addEventListener('click', () => {
     if (ocupado() || !guardarEdicoes()) return;
@@ -428,4 +503,5 @@
     return { raiz, progresso: exibirProgresso, ocupado, atualizarFechar, vazio, temCaptura, carregarCaptura };
   }
   adicionarEspaco();
+  setTimeout(() => void drenarFilaInterna(), 0);
 })();

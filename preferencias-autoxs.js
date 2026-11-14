@@ -3,7 +3,10 @@ const path = require('node:path');
 
 const PADROES = Object.freeze({
   tema: 'escuro', tamanho: 'normal', logsDetalhados: false,
-  confirmacoes: false, pastaVideos: null
+  confirmacoes: false, pastaVideos: null,
+  buscarFotosAutomaticamente: true,
+  pastaFotos: 'G:\\Meu Drive\\Tribuna',
+  fotosClima: {}
 });
 const ARQUIVO = path.join(__dirname, 'preferencias-autoxs.json');
 
@@ -17,6 +20,20 @@ function validar(preferencias) {
   if (typeof preferencias.confirmacoes === 'boolean') resultado.confirmacoes = preferencias.confirmacoes;
   if (typeof preferencias.pastaVideos === 'string' && path.isAbsolute(preferencias.pastaVideos))
     resultado.pastaVideos = path.resolve(preferencias.pastaVideos);
+  if (typeof preferencias.buscarFotosAutomaticamente === 'boolean')
+    resultado.buscarFotosAutomaticamente = preferencias.buscarFotosAutomaticamente;
+  if (typeof preferencias.pastaFotos === 'string' && path.isAbsolute(preferencias.pastaFotos))
+    resultado.pastaFotos = path.resolve(preferencias.pastaFotos);
+  if (preferencias.fotosClima && typeof preferencias.fotosClima === 'object' && !Array.isArray(preferencias.fotosClima)) {
+    resultado.fotosClima = {};
+    for (const [cidade, foto] of Object.entries(preferencias.fotosClima)) {
+      const nome = String(cidade || '').normalize('NFC').trim().slice(0, 100);
+      const id = String(foto?.id || '').trim();
+      const url = String(foto?.url || '').trim();
+      if (!nome || !/^\d+$/.test(id) || (url && !/^https?:\/\//i.test(url))) continue;
+      resultado.fotosClima[nome] = { id, url:url.slice(0, 2000), nome:String(foto?.nome || '').slice(0, 180) };
+    }
+  }
   return resultado;
 }
 
@@ -31,6 +48,8 @@ function criarPreferenciasAutoXS({ arquivo = ARQUIVO } = {}) {
   }
   async function salvar(entrada) {
     const executar = async () => {
+      if (entrada?.pastaFotos != null && (typeof entrada.pastaFotos !== 'string' || !path.isAbsolute(entrada.pastaFotos)))
+        throw new Error('A pasta das fotografias deve ser um caminho absoluto.');
       const dados = validar(entrada);
       if (entrada.pastaVideos != null && !dados.pastaVideos)
         throw new Error('A pasta dos vídeos deve ser um caminho absoluto.');

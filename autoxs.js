@@ -7,6 +7,8 @@ const { confirmarSalvamento, acompanharEnvioManual } = require('./acompanhar-env
 const { conferirCategoriaEsportes, mostrarConferenciaCategoria, ehCategoriaEsportiva } = require('./conferir-esportes');
 const { selecionarPaginaListagem } = require('./pagina-listagem');
 const { criarEnvioAoSite } = require('./preencher-materia');
+const { criarPreferenciasAutoXS } = require('./preferencias-autoxs');
+const { criarPreparadorFotos, criarSeletorFotosCms } = require('./foto-cms-adicao');
 const { criarHistoricoProducao } = require('./historico-producao');
 const { criarCompartilhamento } = require('./compartilhar-materias');
 const { criarBuscadorLinks } = require('./painel-producao');
@@ -1399,7 +1401,9 @@ async function executar() {
   // As abas pendentes continuam editáveis entre cliques no painel.
   // Uma única instância do preenchimento, compartilhada pelo painel e pela
   // ponte do Cayo: não existe segunda automação do formulário.
-  const envioAoSite = criarEnvioAoSite(context, garantirLogin, async () => {},
+  const prepararFotosAdicao = criarPreparadorFotos(criarPreferenciasAutoXS(), { permitirMetadados:true });
+  const seletorFotosCms = criarSeletorFotosCms({ criarAba:() => janelaAdicao.newPage(), garantirLogin });
+  const envioAoSite = criarEnvioAoSite(context, garantirLogin, prepararFotosAdicao,
     () => janelaAdicao.newPage(), registrarAdicao);
   await criarPainelManual(context, async (progresso, paginaEscolhida, modo = 'visivel') => {
     if (paginaEscolhida !== 1 && paginaEscolhida !== 2) throw new Error('Escolha Página 1 ou Página 2 antes de atualizar.');
@@ -1545,7 +1549,7 @@ async function executar() {
     });
     return resumo;
   }, envioAoSite,
-  janelaAdicao, historico, compartilhamento, buscadorLinks, undefined, undefined, integracaoLocal);
+  janelaAdicao, historico, compartilhamento, buscadorLinks, undefined, undefined, integracaoLocal, seletorFotosCms);
   // Ponte opcional do Cayo: atende pedidos de matéria deixados em arquivo e usa
   // o MESMO preenchimento do painel. Ausente, o AutoXS roda exatamente igual.
   let ponteCayo = null;
