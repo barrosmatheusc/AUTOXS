@@ -101,6 +101,7 @@ test('registros sem conclusão usam a criação e arquivo inválido não é sobr
     assert.equal((await historico.consultar('2026-10-07')).registros.length, 0);
     assert.equal(JSON.parse(await fs.readFile(arquivo, 'utf8')).registros.length, 1);
     const conteudoInvalido = '{"versao":1,"registros":';
+    await fs.rm(`${arquivo}.anterior`, { force:true }); // sem cópia válida, não há de onde restaurar
     await fs.writeFile(arquivo, conteudoInvalido);
     await assert.rejects(historico.limparExpirados(), SyntaxError);
     assert.equal(await fs.readFile(arquivo, 'utf8'), conteudoInvalido);

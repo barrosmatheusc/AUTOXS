@@ -52,7 +52,35 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
   const ouvintes = new Set();
   async function lerArquivo() {
     try { return validarEstado(JSON.parse(await fs.readFile(arquivo, 'utf8'))); }
-    catch (erro) { if (erro.code === 'ENOENT') return estadoInicial(); throw erro; }
+    catch (erro) {
+      if (erro.code === 'ENOENT') return estadoInicial();
+      if (!(erro instanceof SyntaxError)) throw erro;
+      // Arquivo ilegível (ex.: queda de energia no meio da gravação): recupera
+      // da última cópia válida em vez de impedir o AutoXS de abrir.
+      const recuperado = await recuperarDeCopia();
+      if (recuperado) return recuperado;
+      throw erro;
+    }
+  }
+  async function lerValido(caminho) {
+    try { return validarEstado(JSON.parse(await fs.readFile(caminho, 'utf8'))); } catch { return null; }
+  }
+  async function recuperarDeCopia() {
+    const pasta = path.join(path.dirname(arquivo), 'backups');
+    let candidatos = [`${arquivo}.anterior`];
+    try {
+      const nomes = (await fs.readdir(pasta)).filter(n => n.startsWith('historico-autoxs-') && n.endsWith('.json')).sort().reverse();
+      candidatos = candidatos.concat(nomes.map(n => path.join(pasta, n)));
+    } catch { /* sem pasta de backups */ }
+    for (const caminho of candidatos) {
+      const estado = await lerValido(caminho);
+      if (!estado) continue;
+      try { await fs.rename(arquivo, `${arquivo}.CORROMPIDO-${Date.now()}`); } catch { /* segue mesmo assim */ }
+      await gravar(estado);
+      console.warn(`[HISTÓRICO] Arquivo corrompido. Restaurado automaticamente de: ${path.basename(caminho)}`);
+      return estado;
+    }
+    return null;
   }
   function dentroDoPrazo(item) {
     const referencia = item.situacao === 'concluido' ? item.concluidoEm : item.criadoEm;
@@ -88,8 +116,15 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
     await fs.mkdir(path.dirname(arquivo), { recursive: true });
     const temporario = `${arquivo}.${process.pid}.${randomUUID()}.tmp`;
     try {
-      await fs.writeFile(temporario, JSON.stringify(estado, null, 2) + '\n', { encoding: 'utf8', flag: 'wx' });
+      const identificador = await fs.open(temporario, 'wx');
+      try {
+        await identificador.writeFile(JSON.stringify(estado, null, 2) + '\n', 'utf8');
+        await identificador.sync(); // força o conteúdo para o disco antes do rename (protege de queda de energia)
+      } finally { await identificador.close(); }
       if (sinal?.aborted) throw new Error('Procura cancelada.');
+      if (await lerValido(arquivo)) {
+        try { await fs.copyFile(arquivo, `${arquivo}.anterior`); } catch { /* cópia é best-effort */ }
+      }
       for (let tentativa = 0; ; tentativa++) {
         try { await fs.rename(temporario, arquivo); break; }
         catch (erro) {

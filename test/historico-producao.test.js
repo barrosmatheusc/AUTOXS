@@ -12,7 +12,7 @@ async function comHistorico(executar) {
   let instante = new Date('2026-10-15T15:00:00.000Z');
   const historico = criarHistoricoProducao(arquivo, () => instante);
   try { await executar({ historico, arquivo, avancar: iso => { instante = new Date(iso); } }); }
-  finally { await fs.rm(arquivo, { force:true }); await fs.rmdir(pasta); }
+  finally { await fs.rm(pasta, { recursive:true, force:true }); }
 }
 
 const url1 = 'https://www.tribunadosertao.com.br/cidades/2026/10/15/1234-noticia-um';

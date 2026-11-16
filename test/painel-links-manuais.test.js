@@ -156,6 +156,7 @@ test('remoção do cartão pede confirmação, permite cancelar e persiste sem a
     await pagina.locator('#manual-previa').waitFor({ state:'visible' });
     await pagina.getByRole('button', { name:'Adicionar à lista' }).click();
     await pagina.getByRole('heading', { name:'Manual' }).waitFor();
+    for (let i = 0; i < 50 && !(await historico.consultar('2026-10-22')).compartilh.length; i++) await new Promise(r => setTimeout(r, 50));
     const item = (await historico.consultar('2026-10-22')).compartilh[0];
     await pagina.locator('.materia').getByRole('button', { name:'🗑️ Remover' }).click();
     assert.match(await pagina.locator('.confirmar-remocao').innerText(), /Seleção de Links e do Relatório de Links/);

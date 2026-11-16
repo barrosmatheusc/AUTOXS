@@ -61,3 +61,6 @@ playwright-report/
 test-results/
 debug/
 *.debug
+historico-autoxs.json.anterior
+historico-autoxs.json.CORROMPIDO-*
+historico-autoxs.CORROMPIDO-*
