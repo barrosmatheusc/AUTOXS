@@ -13,9 +13,9 @@ test('identidade do upload e regras editoriais de legenda/crédito são determin
   assert.deepEqual(metadadosPlanejados({tipoRadar:'clima',titulo:'Previsão',legendaImagem:'Outra',creditoImagem:''}),
     {legenda:'Previsão',credito:null,preservarCredito:true,atualizarGlobal:false});
   assert.deepEqual(metadadosInformados({legendaImagem:'Legenda recebida',creditoImagem:''}),
-    {legenda:'Legenda recebida',credito:null,preservarLegenda:false,preservarCredito:true,atualizarGlobal:false});
+    {legenda:'Legenda recebida',credito:null,preservarLegenda:false,preservarCredito:true,atualizarGlobal:true});
   assert.deepEqual(metadadosInformados({legendaImagem:'',creditoImagem:'João/Assessoria'}),
-    {legenda:null,credito:'João/Assessoria',preservarLegenda:true,preservarCredito:false,atualizarGlobal:false});
+    {legenda:null,credito:'João/Assessoria',preservarLegenda:true,preservarCredito:false,atualizarGlobal:true});
 });
 
 test('metadados compartilhados permanecem bloqueados sem validação real',async()=>{
@@ -93,7 +93,7 @@ async function paginaSelecaoManual(navegador) {
       <article class="dt-card-item" data-id="43"><span class="card-title-item">alternativa.jpg</span><img alt="Foto 43"></article>
       <button type="button" id="cancelar">Cancelar</button>
     </div>
-    <div id="inpModalImagemBox" hidden><input id="inpModalImagemBoxLegenda" value="Legenda original"><input id="inpModalImagemBoxCreditos" value="Crédito original"><input id="inpModalImagemBoxUpdateGlobal" type="checkbox" checked><button class="btn-success">Salvar</button></div>
+    <div id="inpModalImagemBox" hidden><input id="inpModalImagemBoxLegenda" value="Legenda original"><input id="inpModalImagemBoxCreditos" value="Crédito original"><input id="inpModalImagemBoxUpdateGlobal" name="update_global_image" type="checkbox"><button class="btn-success">Salvar</button></div>
     <script>
       const banco=document.querySelector('[role=dialog]'), id=document.querySelector('[name=image_id]');
       document.querySelectorAll('button')[0].onclick=()=>banco.hidden=false;
@@ -101,7 +101,9 @@ async function paginaSelecaoManual(navegador) {
       document.querySelector('#cancelar').onclick=()=>banco.hidden=true;
       const modal=document.querySelector('#inpModalImagemBox');
       document.querySelector('[data-type=image]').onclick=()=>modal.hidden=false;
-      modal.querySelector('button').onclick=async()=>{await fetch('/images/save',{method:'POST'});modal.hidden=true;};
+      const padrao=document.querySelector('#inpModalImagemBoxUpdateGlobal');
+      padrao.onchange=()=>window.mudancasPadrao=(window.mudancasPadrao||0)+1;
+      modal.querySelector('button').onclick=async()=>{window.padraoNoSalvar=padrao.checked;await fetch('/images/save',{method:'POST'});modal.hidden=true;};
     </script>`}));
   await pagina.route('https://manual.test/images/save',rota=>rota.fulfill({status:200,contentType:'application/json',body:'{"ok":true}'}));
   await pagina.goto('https://manual.test/news/add');
@@ -111,12 +113,15 @@ async function paginaSelecaoManual(navegador) {
 test('seleção manual aplica somente legenda e crédito informados e não observa trocas posteriores',async t=>{
   const navegador=await chromium.launch({channel:'msedge',headless:true}); t.after(()=>navegador.close());
   const casos=[
-    {legendaImagem:'Legenda nova com ação e ç',creditoImagem:'João Silva/Assessoria',legenda:'Legenda nova com ação e ç',credito:'João Silva/Assessoria'},
+    {legendaImagem:'Legenda nova com ação e ç',creditoImagem:'João Silva/Assessoria',legenda:'Legenda nova com ação e ç',credito:'João Silva/Assessoria',jaMarcado:true},
     {legendaImagem:'Somente legenda',creditoImagem:'',legenda:'Somente legenda',credito:'Crédito original'},
     {legendaImagem:'',creditoImagem:'Somente crédito/Agência',legenda:'Legenda original',credito:'Somente crédito/Agência'}
   ];
   for(const caso of casos) {
     const pagina=await paginaSelecaoManual(navegador);
+    if(caso.jaMarcado) {
+      await pagina.locator('#inpModalImagemBoxUpdateGlobal').evaluate(el=>{el.checked=true;window.mudancasPadrao=0;});
+    }
     const preparar=criarPreparadorFotos({ler:async()=>({buscarFotosAutomaticamente:false,pastaFotos:'',fotosClima:{}})});
     const processamento=preparar(pagina,{campos:{tipoRadar:'noticias',titulo:'Título',...caso}});
     const banco=pagina.getByRole('dialog',{name:'Imagem de Destaque'});
@@ -127,7 +132,11 @@ test('seleção manual aplica somente legenda e crédito informados e não obser
     assert.equal(resultado.selecaoManual,true); assert.equal(resultado.publicada,false);
     assert.equal(await pagina.locator('#inpModalImagemBoxLegenda').inputValue(),caso.legenda);
     assert.equal(await pagina.locator('#inpModalImagemBoxCreditos').inputValue(),caso.credito);
-    assert.equal(await pagina.locator('#inpModalImagemBoxUpdateGlobal').isChecked(),false);
+    assert.equal(await pagina.locator('#inpModalImagemBoxUpdateGlobal').isChecked(),true);
+    assert.equal(resultado.metadados.atualizarGlobal,true);
+    assert.equal(resultado.metadados.globalConfirmado,true);
+    assert.equal(await pagina.evaluate(()=>window.padraoNoSalvar),true);
+    if(caso.jaMarcado) assert.equal(await pagina.evaluate(()=>window.mudancasPadrao),0,'a opção já marcada não deve ser desmarcada nem alternada');
     await pagina.locator('[data-type="image"]').click();
     await pagina.locator('#inpModalImagemBoxLegenda').fill('Legenda revisada manualmente');
     await pagina.locator('#inpModalImagemBoxCreditos').fill('Crédito revisado manualmente');
@@ -150,6 +159,7 @@ test('campos vazios não abrem o banco nem substituem metadados',async t=>{
   assert.equal(await pagina.getByRole('dialog',{name:'Imagem de Destaque'}).isVisible(),false);
   assert.equal(await pagina.locator('#inpModalImagemBoxLegenda').inputValue(),'Legenda original');
   assert.equal(await pagina.locator('#inpModalImagemBoxCreditos').inputValue(),'Crédito original');
+  assert.equal(await pagina.locator('#inpModalImagemBoxUpdateGlobal').isChecked(),false);
 });
 
 test('cancelamento da seleção não aplica metadados nem publica',async t=>{

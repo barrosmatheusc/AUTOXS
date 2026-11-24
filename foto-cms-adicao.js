@@ -186,7 +186,7 @@ function metadadosPlanejados(campos) {
 function metadadosInformados(campos) {
   const legenda=String(campos?.legendaImagem||'').trim() || null;
   const credito=String(campos?.creditoImagem||'').trim() || null;
-  return {legenda,credito,preservarLegenda:!legenda,preservarCredito:!credito,atualizarGlobal:false};
+  return {legenda,credito,preservarLegenda:!legenda,preservarCredito:!credito,atualizarGlobal:true};
 }
 
 async function aguardarSelecaoManual(aba, dialog, imageIdAnterior=null) {
@@ -238,9 +238,13 @@ async function editarMetadadosLocais(aba, metadados, { permitir = true } = {}) {
     if (await credito.count()!==1) return falha('metadados','Foi informado um crédito, mas o campo de créditos não foi encontrado.');
     await credito.fill(creditoPretendido); creditoFinal=creditoPretendido;
   }
-  // A alteração pertence somente a esta matéria. Nunca torna legenda/crédito
-  // padrão global da mídia sem uma ação explícita do operador.
-  if (await global.count()===1 && await global.isChecked()) await global.uncheck();
+  // A seleção manual autoriza tornar os dados informados o padrão da mídia.
+  // Uploads e escolhas automáticas continuam locais e passam atualizarGlobal=false.
+  if (metadados.atualizarGlobal) {
+    if (await global.count()!==1) return falha('metadados','A opção de definir legenda e créditos como padrão não foi encontrada.');
+    if (!await global.isChecked()) await global.check();
+    if (!await global.isChecked()) return falha('metadados','O CMS não confirmou a marcação dos metadados como padrão.');
+  } else if (await global.count()===1 && await global.isChecked()) await global.uncheck();
   const salvar=modal.locator(SEL.salvar).filter({hasText:/^\s*Salvar\s*$/});
   if (await salvar.count()!==1) return falha('metadados','O botão Salvar da imagem não foi encontrado.');
   let status=null;
@@ -251,8 +255,11 @@ async function editarMetadadosLocais(aba, metadados, { permitir = true } = {}) {
   const imageIdDepois=await lerImageId(aba);
   if (status===null || status>=400 || !fechou) return falha('metadados','O CMS não confirmou o salvamento local da legenda e do crédito.',{status});
   if (imageIdDepois!==imageIdAntes) return falha('metadados','A imagem de destaque mudou durante a edição dos metadados.',{imageIdAntes,imageIdDepois});
+  const globalConfirmado=metadados.atualizarGlobal ? await global.isChecked() : false;
+  if (metadados.atualizarGlobal && !globalConfirmado)
+    return falha('metadados','O CMS salvou os dados, mas a opção de padrão não permaneceu marcada.',{imageId:imageIdDepois});
   return {ok:true,estado:'metadados-confirmados',legenda:legendaFinal,credito:creditoFinal,
-    anterior:anteriores,atualizarGlobal:false,imageId:imageIdDepois,publicada:false};
+    anterior:anteriores,atualizarGlobal:Boolean(metadados.atualizarGlobal),globalConfirmado,imageId:imageIdDepois,publicada:false};
 }
 
 function localizarFotoClima(preferencias, campos) {
