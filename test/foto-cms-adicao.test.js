@@ -4,7 +4,7 @@ const fs=require('node:fs/promises');
 const os=require('node:os');
 const path=require('node:path');
 const {chromium}=require('playwright');
-const {criarPreparadorFotos,enviarESelecionar,extrairIdentidade,metadadosPlanejados,editarMetadadosLocais,listarFotosAcervo}=require('../foto-cms-adicao');
+const {criarPreparadorFotos,enviarESelecionar,extrairIdentidade,metadadosPlanejados,metadadosInformados,editarMetadadosLocais,listarFotosAcervo}=require('../foto-cms-adicao');
 
 test('identidade do upload e regras editoriais de legenda/crédito são determinísticas',()=>{
   assert.deepEqual(extrairIdentidade({data:{image_id:42,url:'https://cdn.test/images/foto.jpg'}}),{id:'42',caminho:'/images/foto.jpg'});
@@ -12,6 +12,10 @@ test('identidade do upload e regras editoriais de legenda/crédito são determin
     {legenda:'Legenda',credito:'Crédito',preservarCredito:false,atualizarGlobal:false});
   assert.deepEqual(metadadosPlanejados({tipoRadar:'clima',titulo:'Previsão',legendaImagem:'Outra',creditoImagem:''}),
     {legenda:'Previsão',credito:null,preservarCredito:true,atualizarGlobal:false});
+  assert.deepEqual(metadadosInformados({legendaImagem:'Legenda recebida',creditoImagem:''}),
+    {legenda:'Legenda recebida',credito:null,preservarLegenda:false,preservarCredito:true,atualizarGlobal:false});
+  assert.deepEqual(metadadosInformados({legendaImagem:'',creditoImagem:'João/Assessoria'}),
+    {legenda:null,credito:'João/Assessoria',preservarLegenda:true,preservarCredito:false,atualizarGlobal:false});
 });
 
 test('metadados compartilhados permanecem bloqueados sem validação real',async()=>{
@@ -77,4 +81,86 @@ test('fluxo integrado envia, seleciona, configura metadados locais e nunca publi
   assert.equal(await pagina.locator('#inpModalImagemBoxLegenda').inputValue(),'Legenda final');
   assert.equal(await pagina.locator('#inpModalImagemBoxCreditos').inputValue(),'Crédito anterior');
   assert.equal(await pagina.locator('#inpModalImagemBoxUpdateGlobal').isChecked(),false);
+});
+
+async function paginaSelecaoManual(navegador) {
+  const pagina=await navegador.newPage();
+  await pagina.route('https://manual.test/news/add',rota=>rota.fulfill({contentType:'text/html',body:`<!doctype html><meta charset="utf-8">
+    <button type="button">+</button><button type="button">+</button>
+    <form><input name="image_id" value=""><div class="card"><img alt="destaque"><button type="button" data-type="image">Editar</button></div></form>
+    <div role="dialog" aria-label="Imagem de Destaque" hidden>
+      <article class="dt-card-item" data-id="42"><span class="card-title-item">foto.jpg</span><img alt="Foto 42"></article>
+      <article class="dt-card-item" data-id="43"><span class="card-title-item">alternativa.jpg</span><img alt="Foto 43"></article>
+      <button type="button" id="cancelar">Cancelar</button>
+    </div>
+    <div id="inpModalImagemBox" hidden><input id="inpModalImagemBoxLegenda" value="Legenda original"><input id="inpModalImagemBoxCreditos" value="Crédito original"><input id="inpModalImagemBoxUpdateGlobal" type="checkbox" checked><button class="btn-success">Salvar</button></div>
+    <script>
+      const banco=document.querySelector('[role=dialog]'), id=document.querySelector('[name=image_id]');
+      document.querySelectorAll('button')[0].onclick=()=>banco.hidden=false;
+      banco.querySelectorAll('article').forEach(item=>item.querySelector('img').onclick=()=>{id.value=item.dataset.id;banco.hidden=true;});
+      document.querySelector('#cancelar').onclick=()=>banco.hidden=true;
+      const modal=document.querySelector('#inpModalImagemBox');
+      document.querySelector('[data-type=image]').onclick=()=>modal.hidden=false;
+      modal.querySelector('button').onclick=async()=>{await fetch('/images/save',{method:'POST'});modal.hidden=true;};
+    </script>`}));
+  await pagina.route('https://manual.test/images/save',rota=>rota.fulfill({status:200,contentType:'application/json',body:'{"ok":true}'}));
+  await pagina.goto('https://manual.test/news/add');
+  return pagina;
+}
+
+test('seleção manual aplica somente legenda e crédito informados e não observa trocas posteriores',async t=>{
+  const navegador=await chromium.launch({channel:'msedge',headless:true}); t.after(()=>navegador.close());
+  const casos=[
+    {legendaImagem:'Legenda nova com ação e ç',creditoImagem:'João Silva/Assessoria',legenda:'Legenda nova com ação e ç',credito:'João Silva/Assessoria'},
+    {legendaImagem:'Somente legenda',creditoImagem:'',legenda:'Somente legenda',credito:'Crédito original'},
+    {legendaImagem:'',creditoImagem:'Somente crédito/Agência',legenda:'Legenda original',credito:'Somente crédito/Agência'}
+  ];
+  for(const caso of casos) {
+    const pagina=await paginaSelecaoManual(navegador);
+    const preparar=criarPreparadorFotos({ler:async()=>({buscarFotosAutomaticamente:false,pastaFotos:'',fotosClima:{}})});
+    const processamento=preparar(pagina,{campos:{tipoRadar:'noticias',titulo:'Título',...caso}});
+    const banco=pagina.getByRole('dialog',{name:'Imagem de Destaque'});
+    await banco.waitFor({state:'visible'});
+    await banco.getByAltText('Foto 42').click();
+    const resultado=await processamento;
+    assert.equal(resultado.estado,'foto-e-metadados-confirmados');
+    assert.equal(resultado.selecaoManual,true); assert.equal(resultado.publicada,false);
+    assert.equal(await pagina.locator('#inpModalImagemBoxLegenda').inputValue(),caso.legenda);
+    assert.equal(await pagina.locator('#inpModalImagemBoxCreditos').inputValue(),caso.credito);
+    assert.equal(await pagina.locator('#inpModalImagemBoxUpdateGlobal').isChecked(),false);
+    await pagina.locator('[data-type="image"]').click();
+    await pagina.locator('#inpModalImagemBoxLegenda').fill('Legenda revisada manualmente');
+    await pagina.locator('#inpModalImagemBoxCreditos').fill('Crédito revisado manualmente');
+    await pagina.locator('#inpModalImagemBox .btn-success').click();
+    await pagina.locator('#inpModalImagemBox').waitFor({state:'hidden'});
+    await pagina.getByRole('button',{name:'+',exact:true}).first().click();
+    await banco.getByAltText('Foto 43').click();
+    assert.equal(await pagina.locator('#inpModalImagemBoxLegenda').inputValue(),'Legenda revisada manualmente');
+    assert.equal(await pagina.locator('#inpModalImagemBoxCreditos').inputValue(),'Crédito revisado manualmente');
+    await pagina.close();
+  }
+});
+
+test('campos vazios não abrem o banco nem substituem metadados',async t=>{
+  const navegador=await chromium.launch({channel:'msedge',headless:true}); t.after(()=>navegador.close());
+  const pagina=await paginaSelecaoManual(navegador);
+  const preparar=criarPreparadorFotos({ler:async()=>({buscarFotosAutomaticamente:false,pastaFotos:'',fotosClima:{}})});
+  const resultado=await preparar(pagina,{campos:{tipoRadar:'noticias',titulo:'Título',legendaImagem:'',creditoImagem:''}});
+  assert.equal(resultado.estado,'sem-foto-automatica');
+  assert.equal(await pagina.getByRole('dialog',{name:'Imagem de Destaque'}).isVisible(),false);
+  assert.equal(await pagina.locator('#inpModalImagemBoxLegenda').inputValue(),'Legenda original');
+  assert.equal(await pagina.locator('#inpModalImagemBoxCreditos').inputValue(),'Crédito original');
+});
+
+test('cancelamento da seleção não aplica metadados nem publica',async t=>{
+  const navegador=await chromium.launch({channel:'msedge',headless:true}); t.after(()=>navegador.close());
+  const pagina=await paginaSelecaoManual(navegador);
+  const preparar=criarPreparadorFotos({ler:async()=>({buscarFotosAutomaticamente:false,pastaFotos:'',fotosClima:{}})});
+  const processamento=preparar(pagina,{campos:{tipoRadar:'noticias',titulo:'Título',legendaImagem:'Legenda nova',creditoImagem:'Crédito novo'}});
+  const banco=pagina.getByRole('dialog',{name:'Imagem de Destaque'}); await banco.waitFor({state:'visible'});
+  await pagina.locator('#cancelar').click();
+  const resultado=await processamento;
+  assert.equal(resultado.estado,'foto-pendente'); assert.equal(resultado.publicada,undefined);
+  assert.equal(await pagina.locator('#inpModalImagemBoxLegenda').inputValue(),'Legenda original');
+  assert.equal(await pagina.locator('#inpModalImagemBoxCreditos').inputValue(),'Crédito original');
 });

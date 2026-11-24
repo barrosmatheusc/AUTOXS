@@ -33,18 +33,20 @@ function separarMensagens(texto, agora) {
   const recebidoEm = new Date(agora).toISOString();
   // Radar de Notícias: os delimitadores explícitos são soberanos e impedem
   // que metadados ou parágrafos de matérias vizinhas sejam misturados.
-  const delimitador = /^\s*(?:#{1,6}\s*)?(IN[IÍ]CIO|FIM)\s+DA\s+MAT[EÉ]RIA\s+(\d+)\s*$/i;
+  const inicioEditorial = /^\s*(?:#{1,6}\s*)?(?:IN[IÍ]CIO\s+(?:DA|DE)\s+)?MAT[EÉ]RIA\s+(\d+)\s*$/i;
+  const fimEditorial = /^\s*(?:#{1,6}\s*)?FIM\s+(?:DA|DE)\s+MAT[EÉ]RIA\s+(\d+)\s*$/i;
   const linhasOriginais = original.split('\n');
   const blocosEditoriais = [];
   let bloco = null;
   for (const linha of linhasOriginais) {
-    const marca = linha.match(delimitador);
-    if (marca?.[1].toLocaleUpperCase('pt-BR').startsWith('IN')) {
+    const inicio = linha.match(inicioEditorial);
+    const fim = linha.match(fimEditorial);
+    if (inicio) {
       if (bloco) throw new Error(`A matéria ${bloco.numero} não possui marcador de fim antes da próxima matéria.`);
-      bloco = { numero:marca[2], linhas:[] }; continue;
+      bloco = { numero:inicio[1], linhas:[] }; continue;
     }
-    if (marca?.[1].toLocaleUpperCase('pt-BR') === 'FIM') {
-      if (!bloco || bloco.numero !== marca[2]) throw new Error(`Marcadores de início e fim da matéria ${marca[2]} não correspondem.`);
+    if (fim) {
+      if (!bloco || bloco.numero !== fim[1]) throw new Error(`Marcadores de início e fim da matéria ${fim[1]} não correspondem.`);
       blocosEditoriais.push(bloco.linhas.join('\n').trim()); bloco = null; continue;
     }
     if (bloco) bloco.linhas.push(linha);

@@ -183,24 +183,60 @@ function metadadosPlanejados(campos) {
     credito:String(campos.creditoImagem||'').trim() || null, preservarCredito:!String(campos.creditoImagem||'').trim(), atualizarGlobal:false };
 }
 
+function metadadosInformados(campos) {
+  const legenda=String(campos?.legendaImagem||'').trim() || null;
+  const credito=String(campos?.creditoImagem||'').trim() || null;
+  return {legenda,credito,preservarLegenda:!legenda,preservarCredito:!credito,atualizarGlobal:false};
+}
+
+async function aguardarSelecaoManual(aba, dialog, imageIdAnterior=null) {
+  const resultado=await dialog.evaluate((modal,{seletorId,anterior})=>new Promise(resolve=>{
+    let concluido=false;
+    const estaVisivel=()=>!modal.hidden && modal.getAttribute('aria-hidden')!=='true' &&
+      getComputedStyle(modal).display!=='none' && getComputedStyle(modal).visibility!=='hidden';
+    const finalizar=()=>{
+      if(concluido || estaVisivel()) return;
+      concluido=true; observador.disconnect();
+      modal.removeEventListener('close',finalizar);
+      modal.removeEventListener('hidden.bs.modal',finalizar);
+      const campo=document.querySelector(seletorId);
+      const imageId=String(campo?.value||'').trim() || null;
+      resolve({imageId,selecionada:Boolean(imageId && imageId!==anterior)});
+    };
+    const observador=new MutationObserver(finalizar);
+    observador.observe(modal,{attributes:true,attributeFilter:['hidden','class','style','aria-hidden']});
+    modal.addEventListener('close',finalizar,{once:true});
+    modal.addEventListener('hidden.bs.modal',finalizar,{once:true});
+    finalizar();
+  }),{seletorId:SEL.idDaMidia,anterior:imageIdAnterior});
+  if(!resultado.selecionada) return falha('selecao-manual','A seleção manual da fotografia foi cancelada ou não foi confirmada pelo CMS.',
+    {imageId:resultado.imageId,anterior:imageIdAnterior});
+  return {ok:true,estado:'selecionada-manualmente',imageId:resultado.imageId,publicada:false,reutilizada:false};
+}
+
 async function editarMetadadosLocais(aba, metadados, { permitir = true } = {}) {
   if (!permitir) return falha('metadados-bloqueados','Legenda e crédito não foram alterados porque a edição local está desativada.',{planejados:metadados});
-  if (!normalizar(metadados?.legenda)) return falha('metadados','Não há legenda nem título para aplicar à fotografia.');
+  const legendaPretendida=normalizar(metadados?.legenda);
+  const creditoPretendido=normalizar(metadados?.credito);
+  if (!legendaPretendida && !creditoPretendido) return falha('metadados','Não há legenda nem crédito informado para aplicar à fotografia.');
   const imageIdAntes=await lerImageId(aba);
   if (!imageIdAntes) return falha('metadados','O formulário não confirmou uma imagem de destaque antes da legenda.');
   const lapis=aba.locator(SEL.lapis);
   if (await lapis.count()!==1) return falha('metadados','O botão de edição da imagem não ficou único.');
+  await lapis.waitFor({state:'visible',timeout:ESPERA});
   await lapis.click({timeout:ESPERA});
   const modal=aba.locator(SEL.modalImagem);
   if (!await modal.waitFor({state:'visible',timeout:ESPERA}).then(()=>true,()=>false)) return falha('metadados','O modal da imagem não abriu.');
   const legenda=modal.locator(SEL.legenda), credito=modal.locator(SEL.credito), global=modal.locator(SEL.padrao);
-  if (await legenda.count()!==1) return falha('metadados','O campo de legenda não foi encontrado.');
-  const anteriores={legenda:await legenda.inputValue(),credito:await credito.count()===1?await credito.inputValue():null};
-  await legenda.fill(normalizar(metadados.legenda));
+  if (legendaPretendida && await legenda.count()!==1) return falha('metadados','O campo de legenda não foi encontrado.');
+  const anteriores={legenda:await legenda.count()===1?await legenda.inputValue():null,
+    credito:await credito.count()===1?await credito.inputValue():null};
+  let legendaFinal=anteriores.legenda;
+  if (legendaPretendida) { await legenda.fill(legendaPretendida); legendaFinal=legendaPretendida; }
   let creditoFinal=anteriores.credito;
-  if (metadados.credito) {
+  if (creditoPretendido) {
     if (await credito.count()!==1) return falha('metadados','Foi informado um crédito, mas o campo de créditos não foi encontrado.');
-    await credito.fill(normalizar(metadados.credito)); creditoFinal=normalizar(metadados.credito);
+    await credito.fill(creditoPretendido); creditoFinal=creditoPretendido;
   }
   // A alteração pertence somente a esta matéria. Nunca torna legenda/crédito
   // padrão global da mídia sem uma ação explícita do operador.
@@ -215,7 +251,7 @@ async function editarMetadadosLocais(aba, metadados, { permitir = true } = {}) {
   const imageIdDepois=await lerImageId(aba);
   if (status===null || status>=400 || !fechou) return falha('metadados','O CMS não confirmou o salvamento local da legenda e do crédito.',{status});
   if (imageIdDepois!==imageIdAntes) return falha('metadados','A imagem de destaque mudou durante a edição dos metadados.',{imageIdAntes,imageIdDepois});
-  return {ok:true,estado:'metadados-confirmados',legenda:normalizar(metadados.legenda),credito:creditoFinal,
+  return {ok:true,estado:'metadados-confirmados',legenda:legendaFinal,credito:creditoFinal,
     anterior:anteriores,atualizarGlobal:false,imageId:imageIdDepois,publicada:false};
 }
 
@@ -239,13 +275,31 @@ function criarPreparadorFotos(preferenciasLocais, { permitirMetadados = true } =
       selecao=await selecionarPorId(aba,acervo.dialog,padrao.id,{nome:padrao.nome});
     } else {
       let caminho=entrada.fotoCaminho||null;
+      let buscaPendente=null;
       if (!caminho && campos.imagemNome && preferencias.buscarFotosAutomaticamente!==false) {
         await log('Procurando a fotografia na pasta configurada…');
         const busca=await buscarFotoLocal({pasta:preferencias.pastaFotos,nomeEsperado:campos.imagemNome,ativa:true});
-        if (busca.estado!=='encontrada') return {estado:'foto-pendente',avisos:[busca.motivo||'FOTO PENDENTE.'],busca};
-        caminho=busca.escolhida.caminho;
+        if (busca.estado==='encontrada') caminho=busca.escolhida.caminho;
+        else buscaPendente=busca;
       }
-      if (!caminho) return {estado:'sem-foto-automatica',avisos:campos.imagemNome?['FOTO PENDENTE — escolha a imagem manualmente.']:[]};
+      if (!caminho) {
+        const informados=metadadosInformados(campos);
+        if (!informados.legenda && !informados.credito)
+          return {estado:buscaPendente?'foto-pendente':'sem-foto-automatica',
+            avisos:buscaPendente?[buscaPendente.motivo||'FOTO PENDENTE.']:(campos.imagemNome?['FOTO PENDENTE — escolha a imagem manualmente.']:[]),
+            ...(buscaPendente?{busca:buscaPendente}:{})};
+        await log('Escolha a fotografia no banco de imagens; a legenda e os créditos informados serão aplicados após a confirmação…');
+        const anterior=await lerImageId(aba);
+        const acervo=await abrirAcervo(aba);
+        if(!acervo.ok) return {estado:'foto-pendente',avisos:[acervo.mensagem],diagnostico:acervo};
+        await aba.bringToFront();
+        selecao=await aguardarSelecaoManual(aba,acervo.dialog,anterior);
+        if(!selecao.ok) return {estado:'foto-pendente',avisos:[selecao.mensagem],diagnostico:selecao};
+        const edicao=await editarMetadadosLocais(aba,informados,{permitir:permitirMetadados});
+        const avisos=[]; if(!edicao.ok) avisos.push(edicao.mensagem);
+        return {estado:edicao.ok?'foto-e-metadados-confirmados':'foto-confirmada-metadados-pendentes',
+          imageId:selecao.imageId,metadados:edicao.ok?edicao:null,avisos,publicada:false,selecaoManual:true};
+      }
       await log('Enviando e confirmando a fotografia…'); selecao=await enviarESelecionar(aba,caminho);
     }
     if (!selecao.ok) return {estado:'foto-pendente',avisos:[selecao.mensagem],diagnostico:selecao};
@@ -277,4 +331,5 @@ function criarSeletorFotosCms({criarAba,garantirLogin}) {
 }
 
 module.exports={criarPreparadorFotos,criarSeletorFotosCms,enviarESelecionar,selecionarPorId,extrairIdentidade,
-  metadadosPlanejados,editarMetadadosLocais,localizarFotoClima,listarFotosAcervo,abrirAcervo,lerImageId,SEL};
+  metadadosPlanejados,metadadosInformados,editarMetadadosLocais,aguardarSelecaoManual,
+  localizarFotoClima,listarFotosAcervo,abrirAcervo,lerImageId,SEL};

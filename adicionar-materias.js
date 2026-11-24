@@ -5,6 +5,7 @@
   const resumoLote = document.querySelector('#resumo-lote');
   const editoresAbertos = new Map();
   const editoresFechados = new Map();
+  const idsFilaAutorizados = new Set();
   let filaDrenagem = Promise.resolve();
   async function acaoFila(acao, outros = {}) {
     if (typeof window.capturaAutoXS !== 'function') throw new Error('Reinicie o AutoXS para carregar a fila persistente.');
@@ -75,10 +76,12 @@
     livre[1].carregarCaptura(rascunho);
     return { ok: true, espaco: livre[0] };
   };
-  async function executarDrenagem() {
+  async function executarDrenagem(idsPermitidos = idsFilaAutorizados) {
     try {
+      const permitidos = new Set(idsPermitidos);
       const estado = await acaoFila('listar');
-      const pendentes = estado.rascunhos.filter(item => ['revisao','aprovado','na-fila','encaminhado'].includes(item.status));
+      const pendentes = estado.rascunhos.filter(item => permitidos.has(item.id) &&
+        ['revisao','aprovado','na-fila','encaminhado'].includes(item.status));
       let distribuidas = 0;
       for (const item of pendentes) {
         const preparado = await acaoFila('prepararEncaminhamento', { id:item.id });
@@ -100,8 +103,9 @@
       return { distribuidas:0, aguardando:0, erro };
     }
   }
-  function drenarFilaInterna() {
-    const proxima = filaDrenagem.then(executarDrenagem);
+  function drenarFilaInterna(idsPermitidos = idsFilaAutorizados) {
+    const ids = [...idsPermitidos];
+    const proxima = filaDrenagem.then(() => executarDrenagem(ids));
     filaDrenagem = proxima.catch(() => {});
     return proxima;
   }
@@ -372,8 +376,9 @@
         mostrarEstado(`Separando e distribuindo ${analise.quantidade} matérias…`, 'carregando');
         const resultado = await acaoFila('importarLote', { entrada:{ texto:bruto.value, origem:'E-mail colado no Adicionar Matérias' } });
         if (!resultado.novas) throw new Error('Estas matérias já estão nos painéis ou na fila. Nenhum registro foi duplicado.');
+        resultado.ids.forEach(id => idsFilaAutorizados.add(id));
         iniciarNovaMateria({ focar:false });
-        const distribuicao = await drenarFilaInterna();
+        const distribuicao = await drenarFilaInterna(resultado.ids);
         mostrarEstado(`${resultado.novas} matéria(s) identificada(s); ${distribuicao.distribuidas} distribuída(s) agora e ${distribuicao.aguardando} aguardando na fila.`, 'concluido');
         return;
       }
@@ -503,5 +508,4 @@
     return { raiz, progresso: exibirProgresso, ocupado, atualizarFechar, vazio, temCaptura, carregarCaptura };
   }
   adicionarEspaco();
-  setTimeout(() => void drenarFilaInterna(), 0);
 })();

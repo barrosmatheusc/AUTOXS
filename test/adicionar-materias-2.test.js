@@ -22,6 +22,41 @@ test('três matérias Radar de Notícias são separadas e preservam metadados',(
   assert.doesNotMatch(campos[0].redacao,/PORTAL|CRÉDITO|TAGS|IMAGEM DE DESTAQUE/);
 });
 
+test('formato Gemini reconhece LEGENDA e CRÉDITOS DA FOTO sem levá-los ao corpo',()=>{
+  const texto=`MATÉRIA 1
+CATEGORIA: Alagoas
+CHAPÉU: EDUCAÇÃO
+TÍTULO: Prefeitura anuncia investimentos na educação municipal
+BIGODE: Novas ações serão realizadas nas escolas municipais
+AUTOR: Assessoria de Comunicação
+LEGENDA: Estudantes participam de atividades na escola municipal
+CRÉDITOS DA FOTO: João Silva/Assessoria
+TEXTO:
+Conteúdo completo da matéria.
+FIM DE MATÉRIA 1`;
+  const [parte]=separarMensagens(texto,new Date());
+  const {campos}=identificarMateria(parte.texto);
+  assert.equal(campos.legendaImagem,'Estudantes participam de atividades na escola municipal');
+  assert.equal(campos.creditoImagem,'João Silva/Assessoria');
+  assert.equal(campos.autor,'Assessoria de Comunicação');
+  assert.equal(campos.redacao,'Conteúdo completo da matéria.');
+  assert.doesNotMatch(campos.redacao,/LEGENDA|CRÉDITOS DA FOTO/);
+});
+
+test('campos vazios de legenda e créditos permanecem vazios e fora do corpo',()=>{
+  const {campos}=identificarMateria(`TÍTULO: Notícia sem metadados
+CHAPÉU: GERAL
+BIGODE: Resumo da notícia.
+AUTOR: Redação
+LEGENDA:
+CRÉDITOS DA FOTO:
+TEXTO:
+Corpo preservado.`);
+  assert.equal(campos.legendaImagem,'');
+  assert.equal(campos.creditoImagem,'');
+  assert.equal(campos.redacao,'Corpo preservado.');
+});
+
 test('três matérias Radar Clima são separadas; subtítulo pontuado e chapéu regional são mantidos',()=>{
   const texto=['ALTO SERTÃO\nTítulo climático um\nSubtítulo climático terminado em ponto.\nCidade Um — Corpo da notícia com previsão de chuva e temperatura de 28°C, contendo informações suficientes para identificação.\nImagem anexa: clima-1.jpg',
     'BAIXO SÃO FRANCISCO\nTítulo climático dois\nOutro subtítulo terminado em ponto.\nCidade Dois — Corpo da notícia com nebulosidade e chuva durante o dia, contendo informações editoriais completas.\nImagem anexa: clima-2.jpg',

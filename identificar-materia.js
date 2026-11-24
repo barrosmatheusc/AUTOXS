@@ -44,8 +44,6 @@
         if (conteudo.every(creditoImagem)) {
           for (let j = inicio; j <= i; j++) linhas[j] = '';
         }
-      } else if (creditoImagem(linhas[i])) {
-        linhas[i] = '';
       }
     }
     return linhas;
@@ -135,7 +133,8 @@
     const retirar = new Set(assinaturaFinal?.indices || []);
     const nomes = { categoria: 'categoria', 'categoria sugerida': 'categoria', editoria: 'categoria', titulo: 'titulo', chapeu: 'chapeu', bigode: 'bigode', subtitulo: 'bigode', autor: 'autor', autora: 'autor', autoria: 'autor',
       'imagem destaque': 'imagemNome', 'imagem de destaque': 'imagemNome', 'imagem de destaque sugerida':'imagemNome', 'foto destaque': 'imagemNome', 'foto de destaque': 'imagemNome', 'imagem anexa':'imagemNome',
-      'legenda da imagem':'legendaImagem', 'legenda da foto':'legendaImagem', 'credito':'creditoImagem', 'creditos':'creditoImagem', 'credito da imagem':'creditoImagem', 'creditos da imagem':'creditoImagem',
+      legenda:'legendaImagem', 'legenda da imagem':'legendaImagem', 'legenda da foto':'legendaImagem', 'credito':'creditoImagem', 'creditos':'creditoImagem', 'credito da imagem':'creditoImagem', 'creditos da imagem':'creditoImagem',
+      'credito da foto':'creditoImagem', 'creditos da foto':'creditoImagem',
       'credito/origem da imagem':'creditoImagem', 'credito / origem da imagem':'creditoImagem', tags:'tags', 'portais recomendados':'portais', 'portal recomendado':'portais', 'portal(is) recomendado(s)':'portais',
       redacao: 'redacao', texto: 'redacao', 'texto da materia': 'redacao' };
     const informados = new Set();

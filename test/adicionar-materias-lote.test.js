@@ -60,15 +60,24 @@ test('uma matéria permanece no próprio painel e não entra na fila',async t=>{
   assert.equal(await pagina.getByRole('button',{name:'Enviar matéria ao site',exact:true}).isEnabled(),true);
 });
 
-test('fila persistente restaura os quatro painéis após reinicialização',async t=>{
+test('fila persistente não injeta matérias automaticamente ao abrir o Adicionar Matérias',async t=>{
   const {pagina}=await ambiente(t,'autoxs-lote-reinicio-');
   await pagina.getByLabel('Texto recebido',{exact:true}).fill(Array.from({length:4},(_,i)=>materia(i+1)).join('\n\n'));
   await pagina.getByRole('button',{name:'Identificar campos',exact:true}).click();
   await pagina.waitForFunction(()=>document.querySelectorAll('[data-campo="titulo"] .valor').length===4);
   await pagina.reload();
-  await pagina.waitForFunction(()=>document.querySelectorAll('[data-campo="titulo"] .valor').length===4);
+  await pagina.waitForTimeout(100);
+  assert.equal(await pagina.locator('.editor-materia').count(),1);
+  assert.equal(await pagina.locator('[data-ref="entrada-materia"]:not([hidden])').count(),1);
+  assert.equal(await pagina.locator('[data-campo="titulo"] .valor').count(),0);
+  assert.equal(await pagina.getByLabel('Texto recebido',{exact:true}).inputValue(),'');
+  const estado=await pagina.evaluate(()=>window.capturaAutoXS({acao:'listar'}));
+  assert.equal(estado.rascunhos.length,4,'a fila permanece preservada, mas só entra após ação explícita');
+  await pagina.getByLabel('Texto recebido',{exact:true}).fill([materia(5),materia(6)].join('\n\n'));
+  await pagina.getByRole('button',{name:'Identificar campos',exact:true}).click();
+  await pagina.waitForFunction(()=>document.querySelectorAll('[data-campo="titulo"] .valor').length===2);
   assert.deepEqual(await pagina.locator('[data-campo="titulo"] .valor').allTextContents(),
-    ['Notícia fictícia 1','Notícia fictícia 2','Notícia fictícia 3','Notícia fictícia 4']);
+    ['Notícia fictícia 5','Notícia fictícia 6'], 'somente o lote enviado nesta sessão pode ocupar os quadros');
 });
 
 test('novo lote ocupa somente quadros livres e não sobrescreve revisão existente',async t=>{
