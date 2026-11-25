@@ -4,10 +4,20 @@ const fs=require('node:fs/promises');
 const os=require('node:os');
 const path=require('node:path');
 const {identificarMateria}=require('../identificar-materia');
+const {validarCampos}=require('../preencher-materia');
 const {separarMensagens,criarCapturaMaterias}=require('../captura-materias');
 const {buscarFotoLocal}=require('../foto-local');
 
 const radar=(n,titulo,imagem)=>`INÍCIO DA MATÉRIA ${n}\n### TÍTULO\n${titulo}\n### CHAPÉU\nGERAL\n### BIGODE\nSubtítulo da matéria ${n}.\n### TEXTO\nCorpo editorial completo da matéria ${n}, preservado sem os metadados técnicos.\n### AUTOR\nTexto: Ana Souza\n### IMAGEM DE DESTAQUE SUGERIDA\n${imagem}\n### LEGENDA DA IMAGEM\nLegenda ${n}\n### CRÉDITO/ORIGEM DA IMAGEM\nFoto: José Silva\n### TAGS\ntag ${n}\n### PORTAL(IS) RECOMENDADO(S)\nTribuna do Sertão\nFIM DA MATÉRIA ${n}`;
+
+test('marcadores de início e fim nunca entram no texto enviado ao CMS',()=>{
+  const completa=identificarMateria(radar(1,'Título sem marcador','foto.jpg')).campos;
+  assert.doesNotMatch(completa.redacao,/IN[IÍ]CIO DA MAT[EÉ]RIA|FIM DA MAT[EÉ]RIA/i);
+  const fimIsolado=identificarMateria('TÍTULO: Teste isolado\nTEXTO: Corpo que deve ser enviado.\nFIM DA MATÉRIA 1').campos;
+  assert.equal(fimIsolado.redacao,'Corpo que deve ser enviado.');
+  const camposAntigos={categoria:'Geral',data:'2026-11-25T10:00:00',titulo:'Teste',chapeu:'GERAL',bigode:'Resumo',autor:'Redação',imagem:'',redacao:'Corpo antigo.\nFIM DA MATÉRIA 7'};
+  assert.equal(validarCampos(camposAntigos).redacao,'Corpo antigo.');
+});
 
 test('três matérias Radar de Notícias são separadas e preservam metadados',()=>{
   const partes=separarMensagens([radar(1,'Título um','um.jpg'),radar(2,'Título dois','dois.jpg'),radar(3,'Título três','tres.jpg')].join('\n\n'),new Date());

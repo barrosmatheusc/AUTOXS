@@ -14,6 +14,12 @@
   }
   const limpar = s => removerEnfase(String(s || '').replace(/^\s*#{1,6}\s*/, ''))
     .replace(/\\\s*$/, '').trim();
+  function removerMarcadoresEditoriais(texto) {
+    return String(texto || '').replace(/\r\n?/g, '\n').split('\n').filter(linha => {
+      const valor = normalizar(limpar(linha)).replace(/[.:;–—-]+$/g, '').trim();
+      return !/^(?:inicio\s+(?:da|de)\s+materia|fim\s+(?:da|de)\s+materia)(?:\s*[:#-]?\s*\d+)?$/.test(valor);
+    }).join('\n');
+  }
   function normalizarTextoCopiado(texto) {
     // Decodifica apenas espaços; outras entidades continuam como texto seguro.
     return String(texto || '').replace(/\r\n?/g, '\n')
@@ -28,7 +34,7 @@
   function limparEstruturasCopiadas(texto) {
     // A barra no fim da linha representa uma quebra no Markdown copiado.
     // Mantém a quebra e os destaques, necessários para reconhecer o bigode.
-    const linhas = normalizarTextoCopiado(texto).split('\n');
+    const linhas = removerMarcadoresEditoriais(normalizarTextoCopiado(texto)).split('\n');
     const creditoImagem = valor => /^(?:fonte\s+da\s+imagem|creditos?\s+(?:da\s+imagem|da\s+foto|das\s+imagens|das\s+fotos))\s*:/
       .test(normalizar(limpar(valor)));
     const celulas = linha => linha.trim().replace(/^\|/, '').replace(/\|$/, '')
@@ -460,7 +466,7 @@
     }
     return { campos, origem };
   }
-  const api = { identificarMateria, horarioAtual, normalizarTextoCopiado, limparEstruturasCopiadas, removerEnfase, normalizarTitulo };
+  const api = { identificarMateria, horarioAtual, normalizarTextoCopiado, limparEstruturasCopiadas, removerMarcadoresEditoriais, removerEnfase, normalizarTitulo };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.IdentificadorMateria = api;
 })(typeof window !== 'undefined' ? window : globalThis);

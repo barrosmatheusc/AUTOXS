@@ -1,4 +1,5 @@
 const { textoParaHtml } = require('./texto-para-html');
+const { removerMarcadoresEditoriais } = require('./identificar-materia');
 const ORIGEM = 'https://redacao.tribunaweb.com.br';
 const { acompanharPublicacaoAdicao } = require('./acompanhar-publicacao-adicao');
 const URL_ADICIONAR = ORIGEM + '/news/add';
@@ -12,6 +13,8 @@ function validarCampos(entrada) {
   if (!entrada || obrigatorios.some(k => typeof entrada[k] !== 'string') || nomes.some(k => entrada[k] !== undefined && typeof entrada[k] !== 'string'))
     throw new Error('Confira os campos da matéria antes de enviar ao formulário.');
   const campos = Object.fromEntries(nomes.map(k => [k, String(entrada[k] || '').trim() ? String(entrada[k]) : '']));
+  // Proteção final para rascunhos criados antes da correção do identificador.
+  campos.redacao = removerMarcadoresEditoriais(campos.redacao).trim();
   for (const chave of ['categoria', 'titulo', 'chapeu', 'bigode', 'autor', 'imagemNome', 'legendaImagem', 'creditoImagem', 'portais', 'tags', 'tipoRadar', 'cidade']) campos[chave] = linhaUnica(campos[chave]);
   // Garante a caixa alta no formulário mesmo após uma edição manual na revisão.
   campos.chapeu = campos.chapeu.trim().toLocaleUpperCase('pt-BR');
