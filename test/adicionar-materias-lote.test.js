@@ -26,8 +26,9 @@ test('campo original distribui quatro matérias, preserva a quinta e não depend
   const {pagina,contexto}=await ambiente(t,'autoxs-lote-ui-');
   let rede=0; await contexto.route(/^https?:/,rota=>{rede++;return rota.abort();});
   assert.equal(await pagina.getByRole('button',{name:'Central de Captura'}).count(),0);
-  await pagina.getByLabel('Texto recebido',{exact:true}).fill(Array.from({length:5},(_,i)=>materia(i+1)).join('\n\n'));
-  await pagina.getByRole('button',{name:'Identificar campos',exact:true}).click();
+  const primeiro=pagina.locator('.editor-materia').first();
+  await primeiro.getByLabel('Texto recebido',{exact:true}).fill(Array.from({length:5},(_,i)=>materia(i+1)).join('\n\n'));
+  await primeiro.getByRole('button',{name:'Identificar campos',exact:true}).click();
   await pagina.waitForFunction(()=>document.querySelectorAll('.editor-materia [data-ref="revisao-materia"]:not([hidden])').length===4);
   assert.deepEqual(await pagina.locator('[data-campo="titulo"] .valor').allTextContents(),
     ['Notícia fictícia 1','Notícia fictícia 2','Notícia fictícia 3','Notícia fictícia 4']);
@@ -37,6 +38,8 @@ test('campo original distribui quatro matérias, preserva a quinta e não depend
   await pagina.waitForFunction(()=>/1 matéria\(s\) aguardando/.test(document.querySelector('#resumo-lote').textContent));
   assert.match(await pagina.locator('#resumo-lote').textContent(),/1 matéria\(s\) aguardando/);
   await pagina.locator('.editor-materia').first().getByRole('button',{name:'Nova matéria'}).click();
+  const itemCinco=pagina.locator('.item-fila').filter({hasText:'Notícia fictícia 5'});
+  await itemCinco.getByRole('button',{name:'Carregar no painel'}).click();
   await pagina.waitForFunction(()=>[...document.querySelectorAll('[data-campo="titulo"] .valor')].some(item=>item.textContent==='Notícia fictícia 5'));
   await pagina.waitForFunction(async()=>{
     const estado=await window.capturaAutoXS({acao:'listar'});
@@ -50,8 +53,9 @@ test('campo original distribui quatro matérias, preserva a quinta e não depend
 
 test('uma matéria permanece no próprio painel e não entra na fila',async t=>{
   const {pagina}=await ambiente(t,'autoxs-individual-ui-');
-  await pagina.getByLabel('Texto recebido',{exact:true}).fill(materia(1));
-  await pagina.getByRole('button',{name:'Identificar campos',exact:true}).click();
+  const primeiro=pagina.locator('.editor-materia').first();
+  await primeiro.getByLabel('Texto recebido',{exact:true}).fill(materia(1));
+  await primeiro.getByRole('button',{name:'Identificar campos',exact:true}).click();
   await pagina.waitForFunction(()=>document.querySelector('[data-campo="titulo"] .valor')?.textContent==='Notícia fictícia 1');
   assert.equal(await pagina.locator('.editor-materia').count(),1);
   assert.equal(await pagina.locator('[data-campo="titulo"] .valor').textContent(),'Notícia fictícia 1');
@@ -62,8 +66,9 @@ test('uma matéria permanece no próprio painel e não entra na fila',async t=>{
 
 test('fila persistente não injeta matérias automaticamente ao abrir o Adicionar Matérias',async t=>{
   const {pagina}=await ambiente(t,'autoxs-lote-reinicio-');
-  await pagina.getByLabel('Texto recebido',{exact:true}).fill(Array.from({length:4},(_,i)=>materia(i+1)).join('\n\n'));
-  await pagina.getByRole('button',{name:'Identificar campos',exact:true}).click();
+  let primeiro=pagina.locator('.editor-materia').first();
+  await primeiro.getByLabel('Texto recebido',{exact:true}).fill(Array.from({length:4},(_,i)=>materia(i+1)).join('\n\n'));
+  await primeiro.getByRole('button',{name:'Identificar campos',exact:true}).click();
   await pagina.waitForFunction(()=>document.querySelectorAll('[data-campo="titulo"] .valor').length===4);
   await pagina.reload();
   await pagina.waitForTimeout(100);
@@ -73,8 +78,9 @@ test('fila persistente não injeta matérias automaticamente ao abrir o Adiciona
   assert.equal(await pagina.getByLabel('Texto recebido',{exact:true}).inputValue(),'');
   const estado=await pagina.evaluate(()=>window.capturaAutoXS({acao:'listar'}));
   assert.equal(estado.rascunhos.length,4,'a fila permanece preservada, mas só entra após ação explícita');
-  await pagina.getByLabel('Texto recebido',{exact:true}).fill([materia(5),materia(6)].join('\n\n'));
-  await pagina.getByRole('button',{name:'Identificar campos',exact:true}).click();
+  primeiro=pagina.locator('.editor-materia').first();
+  await primeiro.getByLabel('Texto recebido',{exact:true}).fill([materia(5),materia(6)].join('\n\n'));
+  await primeiro.getByRole('button',{name:'Identificar campos',exact:true}).click();
   await pagina.waitForFunction(()=>document.querySelectorAll('[data-campo="titulo"] .valor').length===2);
   assert.deepEqual(await pagina.locator('[data-campo="titulo"] .valor').allTextContents(),
     ['Notícia fictícia 5','Notícia fictícia 6'], 'somente o lote enviado nesta sessão pode ocupar os quadros');
@@ -82,8 +88,9 @@ test('fila persistente não injeta matérias automaticamente ao abrir o Adiciona
 
 test('novo lote ocupa somente quadros livres e não sobrescreve revisão existente',async t=>{
   const {pagina}=await ambiente(t,'autoxs-lote-ocupado-');
-  await pagina.getByLabel('Texto recebido',{exact:true}).fill(materia(1));
-  await pagina.getByRole('button',{name:'Identificar campos',exact:true}).click();
+  const primeiro=pagina.locator('.editor-materia').first();
+  await primeiro.getByLabel('Texto recebido',{exact:true}).fill(materia(1));
+  await primeiro.getByRole('button',{name:'Identificar campos',exact:true}).click();
   await pagina.waitForFunction(()=>document.querySelector('[data-campo="titulo"] .valor')?.textContent==='Notícia fictícia 1');
   await pagina.getByRole('button',{name:'Adicionar +1'}).click();
   const segundo=pagina.locator('.editor-materia').nth(1);

@@ -54,6 +54,7 @@ function instalarCaptura(context, pasta) {
       case 'marcarEstado': return captura.marcarEstado(id, pedido.status, pedido.motivo);
       case 'prepararEncaminhamento': return preparar(id);
       case 'descartar': return captura.descartar(id);
+      case 'mover': return captura.mover(id, Number(pedido.direcao), pedido.ordem);
       case 'foto': return captura.obterFoto(id);
       default: throw new Error('Ação de captura desconhecida.');
     }

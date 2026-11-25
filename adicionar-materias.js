@@ -3,10 +3,15 @@
   const modelo = document.querySelector('#modelo-editor-materia');
   const botaoAdicionar = document.querySelector('#adicionar-mais');
   const resumoLote = document.querySelector('#resumo-lote');
+  const listaFila = document.querySelector('#lista-fila');
+  const contadorFila = document.querySelector('#contador-fila');
+  const recadoFila = document.querySelector('#recado-fila');
+  const botaoAtualizarFila = document.querySelector('#atualizar-fila');
   const editoresAbertos = new Map();
-  const editoresFechados = new Map();
   const idsFilaAutorizados = new Set();
+  const STATUS_PENDENTES = new Set(['revisao','aprovado','na-fila','encaminhado','liberada','aguardando-fotografia','aguardando-revisao','publicacao-nao-confirmada']);
   let filaDrenagem = Promise.resolve();
+  let operacaoFila = false;
   async function acaoFila(acao, outros = {}) {
     if (typeof window.capturaAutoXS !== 'function') throw new Error('Reinicie o AutoXS para carregar a fila persistente.');
     return window.capturaAutoXS({ acao, ...outros });
@@ -14,21 +19,20 @@
   function escreverResumo(texto) { if (resumoLote) resumoLote.textContent = texto; }
   function atualizarGrade() {
     grade.dataset.quantidade = String(editoresAbertos.size);
+    botaoAdicionar.hidden = false;
     botaoAdicionar.disabled = editoresAbertos.size >= 4;
-    botaoAdicionar.textContent = editoresAbertos.size >= 4 ? '4 espaços abertos' : 'Adicionar +1';
+    botaoAdicionar.textContent = editoresAbertos.size >= 4 ? '4 painéis abertos' : 'Adicionar +1';
     editoresAbertos.forEach(editor => editor.atualizarFechar());
   }
-  function fecharEspaco(espaco) {
+  async function fecharEspaco(espaco) {
     const editor = editoresAbertos.get(espaco);
-    if (!editor || editoresAbertos.size <= 1 || editor.ocupado()) return;
-    // Guarda o quadro na memória para recuperar texto e revisões ao reabri-lo.
-    // Não fecha nem altera a aba da matéria que já esteja no site.
+    if (!editor || editor.ocupado()) return;
+    const liberado = await editor.liberar();
+    if (!liberado || espaco === 1) return;
     editoresAbertos.delete(espaco);
-    editoresFechados.set(espaco, editor);
     editor.raiz.remove();
     atualizarGrade();
-    grade.querySelector('.editor-materia')?.focus();
-    document.querySelector('#recado-adicao').textContent = 'Quadro fechado. Adicionar +1 recupera os quadros fechados nesta sessão.';
+    document.querySelector('#recado-adicao').textContent = `Painel ${espaco} liberado e ocultado.`;
   }
   function adicionarEspaco() {
     if (editoresAbertos.size >= 4) return;
@@ -36,15 +40,6 @@
     const espaco = [1, 2, 3, 4].find(numero => !editoresAbertos.has(numero));
     const seguinte = [...editoresAbertos.entries()].filter(([numero]) => numero > espaco)
       .sort(([a], [b]) => a - b)[0]?.[1].raiz || null;
-    const guardado = editoresFechados.get(espaco);
-    if (guardado) {
-      editoresFechados.delete(espaco);
-      grade.insertBefore(guardado.raiz, seguinte);
-      editoresAbertos.set(espaco, guardado);
-      atualizarGrade(); guardado.raiz.focus();
-      document.querySelector('#recado-adicao').textContent = 'Quadro reaberto com o conteúdo preservado.';
-      return;
-    }
     const raiz = modelo.content.firstElementChild.cloneNode(true);
     raiz.setAttribute('aria-label', 'Matéria ' + espaco);
     raiz.setAttribute('tabindex', '-1');
@@ -56,17 +51,15 @@
     editoresAbertos.set(espaco, criarEditor(raiz, espaco));
     atualizarGrade();
     document.querySelector('#recado-adicao').textContent = '';
-    raiz.querySelector('[data-ref="texto-bruto"]').focus();
+    if (editoresAbertos.size === 1) raiz.querySelector('[data-ref="texto-bruto"]').focus();
   }
   window.exibirProgressoEnvio = (espaco, mensagem) => editoresAbertos.get(espaco)?.progresso(mensagem);
   // Recebe somente rascunhos aprovados; o envio ao CMS continua em seu botão próprio.
   window.receberRascunhoCaptura = rascunho => {
-    if (!['revisao','aprovado','na-fila','encaminhado'].includes(rascunho?.status) || !rascunho?.campos)
+    if (!STATUS_PENDENTES.has(rascunho?.status) || !rascunho?.campos)
       return { ok: false, mensagem: 'Este rascunho não está disponível para revisão.' };
     const carregado = [...editoresAbertos.entries()].find(([, editor]) => editor.temCaptura(rascunho.id));
     if (carregado) return { ok: true, espaco: carregado[0], reutilizada: true };
-    if ([...editoresFechados.values()].some(editor => editor.temCaptura(rascunho.id)))
-      return { ok: false, mensagem: 'Este rascunho já está em um quadro fechado. Reabra o quadro antes de encaminhar novamente.' };
     let livre = [...editoresAbertos.entries()].find(([, editor]) => editor.vazio());
     if (!livre && editoresAbertos.size < 4) {
       adicionarEspaco();
@@ -80,8 +73,7 @@
     try {
       const permitidos = new Set(idsPermitidos);
       const estado = await acaoFila('listar');
-      const pendentes = estado.rascunhos.filter(item => permitidos.has(item.id) &&
-        ['revisao','aprovado','na-fila','encaminhado'].includes(item.status));
+      const pendentes = estado.rascunhos.filter(item => permitidos.has(item.id) && STATUS_PENDENTES.has(item.status));
       let distribuidas = 0;
       for (const item of pendentes) {
         const preparado = await acaoFila('prepararEncaminhamento', { id:item.id });
@@ -93,10 +85,11 @@
         }
       }
       const atual = await acaoFila('listar');
-      const aguardando = atual.rascunhos.filter(item => ['revisao','aprovado','na-fila','encaminhado'].includes(item.status) &&
+      const aguardando = atual.rascunhos.filter(item => STATUS_PENDENTES.has(item.status) &&
         ![...editoresAbertos.values()].some(editor => editor.temCaptura(item.id))).length;
       const ocupados = [...editoresAbertos.values()].filter(editor => !editor.vazio()).length;
       escreverResumo(`${ocupados} painel(is) ocupado(s) · ${aguardando} matéria(s) aguardando na fila.`);
+      await atualizarFilaVisivel();
       return { distribuidas, aguardando };
     } catch (erro) {
       escreverResumo(erro.message || 'A fila persistente não pôde ser atualizada.');
@@ -110,6 +103,98 @@
     return proxima;
   }
   window.drenarFilaCaptura = drenarFilaInterna;
+  const textoEstado = status => ({
+    revisao:'Revisão necessária', aprovado:'Aprovada', 'na-fila':'Aguardando painel', encaminhado:'Carregada anteriormente',
+    liberada:'Painel liberado', 'aguardando-fotografia':'Aguardando fotografia', 'aguardando-revisao':'Revisão necessária',
+    'publicacao-nao-confirmada':'Envio não confirmado'
+  })[status] || status;
+  const rotulosDetalhes = [
+    ['titulo','Título'], ['chapeu','Chapéu'], ['bigode','Bigode'], ['autor','Autor'], ['categoria','Categoria'],
+    ['legendaImagem','Legenda'], ['creditoImagem','Créditos da foto'], ['redacao','Texto completo']
+  ];
+  async function carregarItemFila(id, enviar = false) {
+    if (operacaoFila) return;
+    operacaoFila = true; recadoFila.textContent = enviar ? 'Preparando a matéria escolhida para o site…' : 'Carregando a matéria escolhida…';
+    try {
+      const preparado = await acaoFila('prepararEncaminhamento', { id });
+      const resposta = window.receberRascunhoCaptura(preparado);
+      if (!resposta?.ok) throw new Error(resposta?.mensagem || 'Não existe painel livre. Libere um painel e tente novamente.');
+      await acaoFila('marcarEstado', { id, status:'encaminhado', motivo:'Matéria carregada no painel escolhido pelo operador.' });
+      recadoFila.textContent = `Matéria carregada no painel ${resposta.espaco}.`;
+      if (enviar) await editoresAbertos.get(resposta.espaco).enviarAoSite();
+    } catch (erro) {
+      recadoFila.textContent = erro.message || 'Não foi possível carregar esta matéria.';
+    } finally {
+      operacaoFila = false; await atualizarFilaVisivel();
+    }
+  }
+  function criarBotao(texto, acao, classe = '') {
+    const botao = document.createElement('button'); botao.type = 'button'; botao.textContent = texto;
+    if (classe) botao.className = classe;
+    botao.addEventListener('click', acao); return botao;
+  }
+  async function atualizarFilaVisivel() {
+    if (typeof window.capturaAutoXS !== 'function') {
+      contadorFila.textContent = 'Reinicie o AutoXS para carregar a fila persistente.'; return;
+    }
+    try {
+      const estado = await acaoFila('listar');
+      const carregados = new Set([...editoresAbertos.values()].map(editor => editor.capturaId()).filter(Boolean));
+      const pendentes = estado.rascunhos.filter(item => STATUS_PENDENTES.has(item.status) && !carregados.has(item.id));
+      contadorFila.textContent = pendentes.length ? `${pendentes.length} matéria(s) aguardando.` : 'Nenhuma matéria aguardando.';
+      listaFila.replaceChildren();
+      pendentes.forEach((item, indice) => {
+        const artigo = document.createElement('article'); artigo.className = 'item-fila'; artigo.dataset.rascunhoId = item.id;
+        const topo = document.createElement('div'); topo.className = 'item-fila-cabecalho';
+        const posicao = document.createElement('span'); posicao.className = 'posicao-fila'; posicao.textContent = String(indice + 1);
+        const resumo = document.createElement('div');
+        const titulo = document.createElement('h3'); titulo.textContent = item.campos?.titulo || 'Matéria sem título';
+        const meta = document.createElement('p'); meta.className = 'meta';
+        meta.textContent = [item.campos?.chapeu || 'Sem chapéu', item.campos?.categoria || 'Sem categoria', item.campos?.autor || 'Sem autor'].join(' · ');
+        resumo.append(titulo, meta);
+        const estadoVisual = document.createElement('span'); estadoVisual.className = 'estado-painel'; estadoVisual.textContent = textoEstado(item.status);
+        topo.append(posicao, resumo, estadoVisual);
+        const acoes = document.createElement('div'); acoes.className = 'acoes acoes-fila';
+        const acoesPrincipais = document.createElement('div'); acoesPrincipais.className = 'grupo-acoes-fila';
+        const acoesOrganizacao = document.createElement('div'); acoesOrganizacao.className = 'grupo-acoes-fila organizacao-fila';
+        const detalhes = document.createElement('div'); detalhes.className = 'detalhes-fila'; detalhes.hidden = true;
+        const dl = document.createElement('dl');
+        for (const [campo, rotulo] of rotulosDetalhes) {
+          const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = rotulo; dd.textContent = item.campos?.[campo] || 'Em branco'; dl.append(dt, dd);
+        }
+        detalhes.append(dl);
+        acoesPrincipais.append(
+          criarBotao('Visualizar', () => { detalhes.hidden = !detalhes.hidden; }, 'acao-neutra'),
+          criarBotao('Carregar no painel', () => void carregarItemFila(item.id), 'acao-principal'),
+          criarBotao('Enviar ao site', () => void carregarItemFila(item.id, true), 'acao-destaque')
+        );
+        const confirmacao = document.createElement('div'); confirmacao.className = 'confirmacao-remocao'; confirmacao.hidden = true;
+        const pergunta = document.createElement('p'); pergunta.textContent = 'Remover somente esta matéria da fila?';
+        const confirmarRemocao = criarBotao('Sim, remover', async () => {
+            if (operacaoFila) return;
+            operacaoFila = true;
+            try { await acaoFila('descartar', { id:item.id }); recadoFila.textContent = 'Matéria removida da fila.'; }
+            catch (erro) { recadoFila.textContent = erro.message || 'Não foi possível remover a matéria.'; }
+            finally { operacaoFila = false; await atualizarFilaVisivel(); }
+          }, 'confirmar-remocao');
+        const cancelarRemocao = criarBotao('Cancelar', () => { confirmacao.hidden = true; remover.focus(); }, 'cancelar-remocao');
+        confirmacao.append(pergunta, confirmarRemocao, cancelarRemocao);
+        const remover = criarBotao('Remover', () => {
+          confirmacao.hidden = false; confirmarRemocao.focus();
+        }, 'acao-remover');
+        acoesOrganizacao.append(
+          criarBotao('↑ Subir', async () => { if (operacaoFila) return; await acaoFila('mover', { id:item.id, direcao:-1, ordem:pendentes.map(rascunho => rascunho.id) }); await atualizarFilaVisivel(); }, 'acao-ordem'),
+          criarBotao('↓ Descer', async () => { if (operacaoFila) return; await acaoFila('mover', { id:item.id, direcao:1, ordem:pendentes.map(rascunho => rascunho.id) }); await atualizarFilaVisivel(); }, 'acao-ordem'),
+          remover
+        );
+        acoes.append(acoesPrincipais, acoesOrganizacao);
+        artigo.append(topo, acoes, confirmacao, detalhes); listaFila.append(artigo);
+      });
+    } catch (erro) {
+      recadoFila.textContent = erro.message || 'Não foi possível carregar a fila persistente.';
+    }
+  }
+  botaoAtualizarFila.addEventListener('click', () => void atualizarFilaVisivel());
   botaoAdicionar.addEventListener('click', adicionarEspaco);
   document.querySelector('#voltar-painel').addEventListener('click', async () => {
     try { await window.voltarAoPainel(); }
@@ -127,7 +212,9 @@
   const mensagemIdentificacao = $('#mensagem-identificacao');
   const tempoIdentificacao = $('#tempo-identificacao');
   const botaoFechar = $('#fechar-espaco');
-  botaoFechar.setAttribute('aria-label', 'Fechar quadro da matéria ' + espaco);
+  const estadoPainel = raiz.querySelector('[data-estado-painel]');
+  botaoFechar.textContent = espaco === 1 ? 'Limpar painel' : 'Liberar e ocultar';
+  botaoFechar.setAttribute('aria-label', (espaco === 1 ? 'Limpar painel da matéria ' : 'Liberar e ocultar painel da matéria ') + espaco);
   botaoFechar.addEventListener('click', () => fecharEspaco(espaco));
   const campos = [['categoria','Categoria'], ['data','Data de publicação'], ['titulo','Título'], ['chapeu','Chapéu'], ['bigode','Bigode'], ['autor','Autor'],
     ['imagemNome','Nome da fotografia'], ['legendaImagem','Legenda da imagem'], ['creditoImagem','Crédito da imagem'], ['cidade','Cidade (Radar Clima)'], ['portais','Portais recomendados'], ['tags','Tags'],
@@ -135,14 +222,20 @@
   const editores = new Map();
   const normalizar = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
   let enviando = false, carregandoCategorias = false, analisandoGemini = false;
+  let categoriasEmAndamento = Promise.resolve();
   let materiaAtual = { texto: '', textoIdentificado: '', campos: null, origem: {} };
   let atualizarSugestoesChapeu = () => {};
   try { localStorage.removeItem('manual-materia-rascunho-v1'); } catch {}
   bruto.value = '';
   function atualizarContinuar() { continuar.hidden = !materiaAtual.campos || bruto.value !== materiaAtual.textoIdentificado; }
   function ocupado() { return enviando || carregandoCategorias || analisandoGemini; }
-  function vazio() { return !ocupado() && !materiaAtual.campos && !bruto.value.trim(); }
+  function vazio() { return !materiaAtual.campos && !bruto.value.trim(); }
   function temCaptura(id) { return materiaAtual.capturaId === id; }
+  function capturaId() { return materiaAtual.capturaId || null; }
+  function definirEstado(rotulo, estado = '') {
+    estadoPainel.textContent = rotulo;
+    estadoPainel.dataset.estadoPainel = estado || rotulo.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '-');
+  }
   function carregarCaptura(rascunho) {
     if (!vazio()) throw new Error('Este quadro já contém uma matéria.');
     const originais = (rascunho.mensagens || []).map(item => item.textoOriginal).join('\n\n');
@@ -157,6 +250,7 @@
       campos: camposRascunho, origem: {} };
     for (const chave of Object.keys(materiaAtual.campos)) materiaAtual.origem[chave] = 'Identificado no e-mail colado';
     abrirRevisao();
+    definirEstado('Matéria identificada', 'identificada');
     mostrarEstado(rascunho.fotoCaminho ? 'Rascunho carregado com a fotografia associada. Confira os campos antes de preencher o CMS.' : 'Rascunho carregado. Se houver nome de fotografia, o AutoXS tentará encontrá-la na pasta configurada.', 'concluido');
     raiz.focus();
   }
@@ -172,7 +266,7 @@
     mostrarEstado(enviando ? 'A matéria está sendo preenchida no site. Aguarde terminar.'
       : 'As categorias do site ainda estão carregando. Aguarde terminar.');
   }
-  function atualizarFechar() { botaoFechar.disabled = editoresAbertos.size <= 1 || ocupado(); }
+  function atualizarFechar() { botaoFechar.disabled = ocupado(); }
   function atualizarEnvio() {
     botaoEnvio.disabled = ocupado();
     botaoGemini.disabled = ocupado();
@@ -184,6 +278,7 @@
   }
   bruto.addEventListener('input', () => {
     materiaAtual.texto = bruto.value; $('#recado-entrada').textContent = ''; atualizarContinuar();
+    definirEstado(bruto.value.trim() ? 'Em edição' : 'Livre', bruto.value.trim() ? 'identificada' : 'livre');
     if (!ocupado()) mostrarEstado('');
   });
   function formatar(id, valor) {
@@ -238,7 +333,8 @@
         carregandoCategorias = false; atualizarEnvio(); seletor.disabled = enviando; carregar.disabled = enviando;
       }
     };
-    carregar.addEventListener('click', carregarLista); void carregarLista();
+    const iniciarCarregamento = () => (categoriasEmAndamento = carregarLista());
+    carregar.addEventListener('click', iniciarCarregamento); void iniciarCarregamento();
   }
   function desenhar() {
     const lista = $('#campos-identificados'); lista.replaceChildren(); editores.clear();
@@ -370,6 +466,7 @@
           const unica = analise.materias[0];
           materiaAtual = { id:crypto.randomUUID(), texto:bruto.value, textoIdentificado:bruto.value, ...unica.resultado };
           abrirRevisao();
+          definirEstado('Matéria identificada', 'identificada');
           mostrarEstado('Matéria identificada neste painel. Confira os campos antes de preencher o CMS.', 'concluido');
           return;
         }
@@ -384,6 +481,7 @@
       }
       const resultado = window.IdentificadorMateria.identificarMateria(bruto.value);
       materiaAtual = { id: crypto.randomUUID(), texto: bruto.value, textoIdentificado: bruto.value, ...resultado }; abrirRevisao();
+      definirEstado('Matéria identificada', 'identificada');
       mostrarEstado('Campos identificados. Confira a revisão abaixo.', 'concluido');
     } catch (erro) {
       $('#recado-entrada').textContent = erro.message;
@@ -437,6 +535,7 @@
       analisandoGemini = false;
       recado.textContent = ''; atualizarContinuar(); abrirRevisao();
       mostrarEstado('Análise concluída. Confira os campos separados pelo Gemini abaixo.', 'concluido');
+      definirEstado('Matéria identificada', 'identificada');
     } catch (erro) {
       recado.textContent = erro.message || 'Não foi possível analisar. O texto foi preservado.';
       mostrarEstado(recado.textContent, 'erro');
@@ -446,9 +545,12 @@
     }
   });
   const exibirProgresso = texto => { $('#recado-revisao').textContent = String(texto); };
-  botaoEnvio.addEventListener('click', async () => {
+  async function enviarAoSite() {
+    if (enviando || analisandoGemini || !materiaAtual.campos) return;
+    if (carregandoCategorias) await categoriasEmAndamento.catch(() => {});
     if (ocupado() || !materiaAtual.campos || !guardarEdicoes()) return;
     enviando = true;
+    definirEstado('Enviando ao CMS', 'enviando');
     atualizarEnvio();
     const controles = [...revisao.querySelectorAll('button, select')]; controles.forEach(b=>{b.disabled=true;});
     botaoEnvio.textContent = 'Preenchendo no site…'; exibirProgresso('Aguardando o preenchimento desta matéria…');
@@ -466,6 +568,7 @@
       mensagemSucesso = (resposta.reutilizada ? 'A aba já preenchida foi reaberta.' : 'Matéria preenchida no site.') + ' Este quadro está pronto para uma nova matéria. A publicação final continua sendo feita por você no site.' + (resposta.avisos?.length ? ' ' + resposta.avisos.join(' ') : '');
     } catch (erro) {
       exibirProgresso(erro.message || 'Não foi possível preencher. Confira a aba do site.');
+      definirEstado('Erro', 'erro');
     } finally {
       enviando = false; controles.forEach(b=>{b.disabled=false;}); botaoEnvio.textContent = 'Enviar matéria ao site'; atualizarEnvio(); atualizarSugestoesChapeu();
     }
@@ -474,9 +577,11 @@
       // matéria estiver sendo digitada enquanto o site termina o preenchimento.
       iniciarNovaMateria({ focar: raiz.contains(document.activeElement) });
       mostrarEstado(mensagemSucesso, 'concluido');
-      setTimeout(() => void window.drenarFilaCaptura?.(), 0);
+      definirEstado('Concluído — livre', 'concluido');
     }
-  });
+    await atualizarFilaVisivel();
+  }
+  botaoEnvio.addEventListener('click', enviarAoSite);
   continuar.addEventListener('click', () => { if (!ocupado()) abrirRevisao(); });
   function guardarEdicoes() { for (const aplicar of [...editores.values()]) if (!aplicar()) return false; return true; }
   function iniciarNovaMateria({ focar = true } = {}) {
@@ -492,6 +597,20 @@
     entrada.querySelector('.miolo').scrollTop = 0;
     if (focar) bruto.focus();
   }
+  async function liberar() {
+    if (ocupado()) return false;
+    if (!vazio()) {
+      const titulo = materiaAtual.campos?.titulo || 'a matéria deste painel';
+      if (!confirm(`Liberar este painel? ${titulo} continuará disponível na fila quando tiver sido importada.`)) return false;
+      if (materiaAtual.capturaId) {
+        try { await acaoFila('marcarEstado', { id:materiaAtual.capturaId, status:'na-fila', motivo:'Painel liberado; matéria preservada na fila.' }); }
+        catch (erro) { $('#recado-revisao').textContent = erro.message || 'Não foi possível preservar a matéria na fila.'; return false; }
+      }
+    }
+    iniciarNovaMateria(); definirEstado('Livre', 'livre');
+    document.querySelector('#recado-adicao').textContent = `Painel ${espaco} liberado.`;
+    await atualizarFilaVisivel(); return true;
+  }
   $('#nova-materia').addEventListener('click', async () => {
     if (ocupado()) return;
     if (materiaAtual.capturaId && typeof window.capturaAutoXS === 'function') {
@@ -499,13 +618,15 @@
       catch (erro) { $('#recado-revisao').textContent = erro.message || 'Não foi possível liberar esta matéria da fila.'; return; }
     }
     iniciarNovaMateria();
-    setTimeout(() => void drenarFilaInterna(), 0);
+    definirEstado('Livre', 'livre');
+    await atualizarFilaVisivel();
   });
   $('#voltar-texto').addEventListener('click', () => {
     if (ocupado() || !guardarEdicoes()) return;
     revisao.hidden = true; atualizarContinuar(); entrada.hidden = false;
   });
-    return { raiz, progresso: exibirProgresso, ocupado, atualizarFechar, vazio, temCaptura, carregarCaptura };
+    return { raiz, progresso: exibirProgresso, ocupado, atualizarFechar, vazio, temCaptura, capturaId, carregarCaptura, liberar, enviarAoSite };
   }
   adicionarEspaco();
+  void atualizarFilaVisivel();
 })();

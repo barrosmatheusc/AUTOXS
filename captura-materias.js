@@ -421,7 +421,8 @@ function criarCapturaMaterias(pasta = PASTA_PADRAO, relogio = () => new Date()) 
   }
   async function prepararEncaminhamento(id) {
     const estado = await ler();
-    const rascunho = estado.rascunhos.find(item => item.id === id && ['revisao','aprovado','encaminhado','na-fila'].includes(item.status));
+    const rascunho = estado.rascunhos.find(item => item.id === id &&
+      ['revisao','aprovado','encaminhado','na-fila','liberada','aguardando-fotografia','aguardando-revisao','publicacao-nao-confirmada'].includes(item.status));
     if (!rascunho) throw new Error('Rascunho disponível não encontrado.');
     const mensagens = rascunho.mensagemIds.map(mensagemId => estado.mensagens.find(item => item.id === mensagemId)).filter(Boolean);
     let fotoCaminho = null, fotoNome = null;
@@ -437,11 +438,28 @@ function criarCapturaMaterias(pasta = PASTA_PADRAO, relogio = () => new Date()) 
   }
   async function descartar(id) {
     return alterar(estado => {
-      const rascunho = estado.rascunhos.find(item => item.id === id && item.status !== 'encaminhado');
+      const rascunho = estado.rascunhos.find(item => item.id === id && !['descartado','preenchida','publicada'].includes(item.status));
       if (!rascunho) throw new Error('Rascunho não encontrado para descarte.');
       rascunho.status = 'descartado'; rascunho.atualizadoEm = agora();
       rascunho.mensagemIds.forEach(mensagemId => { estado.mensagens.find(item => item.id === mensagemId).descartada = true; });
       return structuredClone(rascunho);
+    });
+  }
+  async function mover(id, direcao, ordemVisivel = []) {
+    if (![-1, 1].includes(direcao)) throw new Error('Direção inválida para reordenar a fila.');
+    return alterar(estado => {
+      const pendente = item => !['descartado','preenchida','publicada'].includes(item.status);
+      const permitidos = Array.isArray(ordemVisivel) && ordemVisivel.length
+        ? new Set(ordemVisivel.filter(item => typeof item === 'string')) : null;
+      const indices = estado.rascunhos.map((item, indice) => pendente(item) && (!permitidos || permitidos.has(item.id)) ? indice : -1).filter(indice => indice >= 0);
+      const atualNaFila = indices.findIndex(indice => estado.rascunhos[indice].id === id);
+      const destinoNaFila = atualNaFila + direcao;
+      if (atualNaFila < 0) throw new Error('Matéria não encontrada na fila.');
+      if (destinoNaFila < 0 || destinoNaFila >= indices.length) return structuredClone(estado.rascunhos[indices[atualNaFila]]);
+      const atual = indices[atualNaFila], destino = indices[destinoNaFila];
+      [estado.rascunhos[atual], estado.rascunhos[destino]] = [estado.rascunhos[destino], estado.rascunhos[atual]];
+      estado.rascunhos[destino].atualizadoEm = agora();
+      return structuredClone(estado.rascunhos[destino]);
     });
   }
   async function obterFoto(id) {
@@ -453,7 +471,7 @@ function criarCapturaMaterias(pasta = PASTA_PADRAO, relogio = () => new Date()) 
     return `data:${TIPOS[foto.tipo]};base64,${bytes.toString('base64')}`;
   }
   return { receber, organizar, analisarLote, importarLote, listar, atualizar, juntar, separar, associarFoto,
-    confirmarGrupo, aprovar, marcarEncaminhado, marcarEstado, prepararEncaminhamento, descartar, obterFoto };
+    confirmarGrupo, aprovar, marcarEncaminhado, marcarEstado, prepararEncaminhamento, descartar, mover, obterFoto };
 }
 
 module.exports = { criarCapturaMaterias, separarMensagens, proporGrupos, PASTA_PADRAO };

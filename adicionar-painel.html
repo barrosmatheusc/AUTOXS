@@ -6,12 +6,17 @@
   <link rel="stylesheet" href="adicionar-materias.css">
 </head>
 <body class="painel-adicao">
-  <header class="cabecalho-adicao"><div><h1>Adicionar matérias</h1><p>Cole uma ou várias matérias em um quadro. O AutoXS separa e distribui até quatro por vez.</p><p id="resumo-lote" class="resumo-lote" role="status" aria-live="polite">Fila pronta.</p></div><div class="acoes-cabecalho"><button id="adicionar-mais" type="button">Adicionar +1</button><button id="voltar-painel" type="button">Painel inicial</button></div></header>
+  <header class="cabecalho-adicao"><div><h1>Adicionar matérias</h1><p>Cole uma matéria ou abra novos painéis quando precisar. Ao colar várias matérias, o AutoXS abre os espaços necessários.</p><p id="resumo-lote" class="resumo-lote" role="status" aria-live="polite">Fila pronta.</p></div><div class="acoes-cabecalho"><button id="adicionar-mais" type="button">Adicionar +1</button><button id="voltar-painel" type="button">Painel inicial</button></div></header>
   <main id="grade-materias" class="grade-materias" data-quantidade="1" aria-label="Espaços para adicionar matérias"></main>
   <p id="recado-adicao" role="status"></p>
+  <section class="fila-materias" aria-labelledby="titulo-fila">
+    <header><div><h2 id="titulo-fila">Fila de matérias</h2><p id="contador-fila">Nenhuma matéria aguardando.</p></div><button id="atualizar-fila" type="button" class="secundario">Atualizar fila</button></header>
+    <p id="recado-fila" class="recado" role="status" aria-live="polite"></p>
+    <div id="lista-fila" class="lista-fila"></div>
+  </section>
   <template id="modelo-editor-materia">
     <article class="materia-dialog editor-materia">
-      <header class="cabecalho-editor"><h2 data-numero-materia></h2><button id="fechar-espaco" type="button" class="secundario">Fechar quadro</button></header>
+      <header class="cabecalho-editor"><div><h2 data-numero-materia></h2><span class="estado-painel" data-estado-painel="livre">Livre</span></div><button id="fechar-espaco" type="button" class="secundario">Liberar painel</button></header>
       <div id="estado-identificacao" class="estado-identificacao" role="status" aria-live="polite" aria-atomic="true" hidden>
         <span class="indicador-identificacao" aria-hidden="true"></span>
         <span id="mensagem-identificacao"></span>
