@@ -544,40 +544,67 @@
       analisandoGemini = false; botaoGemini.textContent = 'Identificar com Gemini'; atualizarEnvio();
     }
   });
-  const exibirProgresso = texto => { $('#recado-revisao').textContent = String(texto); };
+  // O preenchimento continua em segundo plano depois que o quadro é liberado;
+  // o progresso aparece no recado geral para não invadir a próxima matéria.
+  const exibirProgresso = texto => {
+    const recado = document.querySelector('#recado-adicao');
+    if (recado) recado.textContent = `Painel ${espaco}: ${String(texto)}`;
+  };
+  function restaurarMateria(copia) {
+    materiaAtual = copia; bruto.value = copia.texto || '';
+    abrirRevisao();
+  }
   async function enviarAoSite() {
     if (enviando || analisandoGemini || !materiaAtual.campos) return;
     if (carregandoCategorias) await categoriasEmAndamento.catch(() => {});
     if (ocupado() || !materiaAtual.campos || !guardarEdicoes()) return;
-    enviando = true;
-    definirEstado('Enviando ao CMS', 'enviando');
-    atualizarEnvio();
-    const controles = [...revisao.querySelectorAll('button, select')]; controles.forEach(b=>{b.disabled=true;});
-    botaoEnvio.textContent = 'Preenchendo no site…'; exibirProgresso('Aguardando o preenchimento desta matéria…');
-    let mensagemSucesso = '';
+    enviando = true; atualizarEnvio();
+    const copia = structuredClone(materiaAtual);
+    const titulo = copia.campos.titulo || 'sem título';
+    const capturavel = Boolean(copia.capturaId && typeof window.capturaAutoXS === 'function');
     try {
-      const resposta = await window.enviarMateriaAoSite({espaco,id:materiaAtual.id,campos:{...materiaAtual.campos},
-        fotoCaminho:materiaAtual.fotoCaminho || null, capturaId:materiaAtual.capturaId || null});
+      // Tira a matéria da fila antes de liberar o quadro, para ela não ser recarregada.
+      if (capturavel) await window.capturaAutoXS({acao:'marcarEstado',id:copia.capturaId,status:'preenchendo',
+        motivo:'Enviada ao site; preenchimento em andamento.'});
+    } catch (erro) {
+      enviando = false; atualizarEnvio();
+      $('#recado-revisao').textContent = erro.message || 'Não foi possível registrar o envio. Tente novamente.';
+      return;
+    }
+    // Libera o quadro imediatamente para a próxima matéria.
+    enviando = false;
+    iniciarNovaMateria({ focar: raiz.contains(document.activeElement) });
+    definirEstado('Livre', 'livre');
+    mostrarEstado(`"${titulo}" foi enviada ao site e está sendo preenchida. Este quadro já está livre.`, 'concluido');
+    atualizarEnvio();
+    void drenarFilaInterna();
+    try {
+      const resposta = await window.enviarMateriaAoSite({espaco,id:copia.id,campos:{...copia.campos},
+        fotoCaminho:copia.fotoCaminho || null, capturaId:copia.capturaId || null});
       if (resposta?.ok !== true) throw new Error(resposta?.mensagem || 'O preenchimento no site não foi confirmado.');
-      if (materiaAtual.capturaId && typeof window.capturaAutoXS === 'function') {
-        const fotoPendente = ['foto-pendente','sem-foto-automatica'].includes(resposta.foto?.estado) && Boolean(materiaAtual.campos.imagemNome || materiaAtual.fotoCaminho);
-        await window.capturaAutoXS({acao:'marcarEstado',id:materiaAtual.capturaId,
+      if (capturavel) {
+        const fotoPendente = ['foto-pendente','sem-foto-automatica'].includes(resposta.foto?.estado) && Boolean(copia.campos.imagemNome || copia.fotoCaminho);
+        await window.capturaAutoXS({acao:'marcarEstado',id:copia.capturaId,
           status:fotoPendente?'aguardando-fotografia':'preenchida',
           motivo:fotoPendente?'Formulário preenchido; fotografia requer revisão manual.':'Formulário preenchido; publicação continua manual.'});
       }
-      mensagemSucesso = (resposta.reutilizada ? 'A aba já preenchida foi reaberta.' : 'Matéria preenchida no site.') + ' Este quadro está pronto para uma nova matéria. A publicação final continua sendo feita por você no site.' + (resposta.avisos?.length ? ' ' + resposta.avisos.join(' ') : '');
+      exibirProgresso(`"${titulo}" ` + (resposta.reutilizada ? 'teve a aba já preenchida reaberta.' : 'foi preenchida no site.') +
+        ' A publicação final continua sendo feita por você no site.' + (resposta.avisos?.length ? ' ' + resposta.avisos.join(' ') : ''));
     } catch (erro) {
-      exibirProgresso(erro.message || 'Não foi possível preencher. Confira a aba do site.');
-      definirEstado('Erro', 'erro');
-    } finally {
-      enviando = false; controles.forEach(b=>{b.disabled=false;}); botaoEnvio.textContent = 'Enviar matéria ao site'; atualizarEnvio(); atualizarSugestoesChapeu();
-    }
-    if (mensagemSucesso) {
-      // Limpa só este quadro depois da confirmação. Não rouba o foco se outra
-      // matéria estiver sendo digitada enquanto o site termina o preenchimento.
-      iniciarNovaMateria({ focar: raiz.contains(document.activeElement) });
-      mostrarEstado(mensagemSucesso, 'concluido');
-      definirEstado('Concluído — livre', 'concluido');
+      const motivo = erro.message || 'Não foi possível preencher. Confira a aba do site.';
+      if (raiz.isConnected && vazio()) {
+        restaurarMateria(copia);
+        $('#recado-revisao').textContent = motivo;
+        definirEstado('Erro', 'erro');
+        if (capturavel) await window.capturaAutoXS({acao:'marcarEstado',id:copia.capturaId,status:'encaminhado',
+          motivo:'Falha no preenchimento; matéria devolvida ao painel.'}).catch(() => {});
+      } else if (capturavel) {
+        await window.capturaAutoXS({acao:'marcarEstado',id:copia.capturaId,status:'na-fila',
+          motivo:'Falha no preenchimento; matéria devolvida à fila.'}).catch(() => {});
+        exibirProgresso(`"${titulo}" não foi preenchida e voltou para a fila. ${motivo}`);
+      } else {
+        exibirProgresso(`"${titulo}" não foi preenchida e o quadro já tinha outra matéria. Confira a aba do site. ${motivo}`);
+      }
     }
     await atualizarFilaVisivel();
   }
