@@ -34,10 +34,12 @@ async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao 
   let geradorVideos = null;
   let processadorVideosAtivo = null;
   let abrindoVideos = null;
-  let filaAdicao = Promise.resolve();
-  const enfileirarAdicao = tarefa => {
-    const resultado = filaAdicao.then(tarefa);
-    filaAdicao = resultado.catch(() => {});
+  // Uma fila por painel: cada painel tem sua propria aba no site, entao uma
+  // materia esperando a escolha da foto nao segura as dos outros paineis.
+  const filasAdicao = new Map();
+  const enfileirarAdicao = (espaco, tarefa) => {
+    const resultado = (filasAdicao.get(espaco) || Promise.resolve()).then(tarefa);
+    filasAdicao.set(espaco, resultado.catch(() => {}));
     return resultado;
   };
   const espacoValido = numero => Number.isInteger(numero) && numero >= 1 && numero <= 4;
@@ -210,7 +212,7 @@ async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao 
       });
       await pagina.exposeBinding('listarCategoriasDoSite', async ({ frame }, espaco) => {
         if (!origemValida(frame) || !espacoValido(espaco)) return {ok:false,mensagem:'Abra um espaço de adição para escolher a categoria.'};
-        return enfileirarAdicao(async () => {
+        return enfileirarAdicao(espaco, async () => {
           if (pagina.isClosed()) return {ok:false,mensagem:'A janela de adição foi fechada.'};
           try {
             if (typeof enviarAoSite?.listarCategorias !== 'function') throw new Error('Reinicie o AutoXS para carregar as categorias.');
@@ -222,7 +224,7 @@ async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao 
       await pagina.exposeBinding('enviarMateriaAoSite', async ({ frame }, entrada) => {
         if (!origemValida(frame) || !espacoValido(entrada?.espaco)) return {ok:false,mensagem:'Abra um espaço de adição para preencher a matéria.'};
         // Cada solicitação leva sua própria cópia dos campos e o número do espaço.
-        return enfileirarAdicao(async () => {
+        return enfileirarAdicao(entrada.espaco, async () => {
           if (pagina.isClosed()) return {ok:false,mensagem:'A janela de adição foi fechada.'};
           try {
             if (typeof enviarAoSite !== 'function') throw new Error('Reinicie o AutoXS para conectar ao formulário do site.');

@@ -20,8 +20,8 @@ test('painéis adicionais aparecem sob demanda e se reorganizam sem rolagem hori
       const area = item.getBoundingClientRect(); return { x:area.x, y:area.y, largura:area.width };
     }));
     assert.equal(caixas.length, 4);
-    assert.equal(new Set(caixas.map(item => Math.round(item.y))).size, 2);
-    assert.ok(caixas.every(item => item.largura >= 300));
+    assert.equal(new Set(caixas.map(item => Math.round(item.y))).size, 1);
+    assert.ok(caixas.every(item => item.largura >= 380));
     await grade.locator('.editor-materia').first().locator('[data-ref="texto-bruto"]').fill('Primeira matéria');
     await page.setViewportSize({ width:800, height:700 });
     assert.equal(await grade.evaluate(el => el.scrollWidth > el.clientWidth), false);

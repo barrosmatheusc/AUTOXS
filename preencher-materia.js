@@ -200,11 +200,18 @@ function criarEnvioAoSite(context, garantirLogin, prepararFotos = async () => {}
     require('./captura-ponte').instalarCaptura(context, opcoes.pastaCaptura)
       .catch(erro => console.warn('[CAPTURA] Não foi possível instalar a caixa de entrada:', erro.message));
   }
+  // Os paineis preenchem em paralelo; so o login e feito um de cada vez.
+  let filaLogin = Promise.resolve();
+  const loginSerializado = aba => {
+    const resultado = filaLogin.then(() => garantirLogin(aba));
+    filaLogin = resultado.catch(() => {});
+    return resultado;
+  };
   const espacos = new Map();
   function obterEspaco(numero) {
     if (!Number.isInteger(numero) || numero < 1 || numero > 4) throw new Error('Escolha um dos quatro espaços de adição.');
     if (!espacos.has(numero)) {
-      espacos.set(numero, criarEnvioIndividual(context, garantirLogin, prepararFotos, criarAba, aoEvento));
+      espacos.set(numero, criarEnvioIndividual(context, loginSerializado, prepararFotos, criarAba, aoEvento));
     }
     return espacos.get(numero);
   }

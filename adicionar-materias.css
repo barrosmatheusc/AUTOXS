@@ -50,6 +50,11 @@
 .acoes-cabecalho button { white-space: nowrap; }
 .grade-materias { display: grid; grid-template-columns: repeat(2, minmax(300px, 1fr)); gap: 16px; max-width: 100%; }
 .grade-materias[data-quantidade="1"] { grid-template-columns: minmax(0, 900px); justify-content: center; }
+/* Um painel ao lado do outro, em colunas, como antes. */
+.grade-materias[data-quantidade="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grade-materias[data-quantidade="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.grade-materias[data-quantidade="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media(max-width: 1200px) { .grade-materias[data-quantidade="3"], .grade-materias[data-quantidade="4"] { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .grade-materias .editor-materia { width: 100%; min-width: 0; box-sizing: border-box; max-height: none; height: calc(100vh - 130px); min-height: 350px; display: flex; flex-direction: column; overflow: hidden; }
 .editor-materia .cabecalho-editor { flex: 0 0 auto; padding: 14px 18px; }
 .editor-materia .cabecalho-editor h2 { font-size: 20px; }
@@ -104,4 +109,4 @@
 .editor-materia .acoes { gap: 8px; }
 .editor-materia .recado { margin-top: 8px; }
 .editor-materia .explicacao { margin: 10px 0 0; font-size: 12px; }
-@media(max-width: 780px) { .cabecalho-adicao { align-items: flex-start; } .painel-adicao { padding: 12px; } .grade-materias { grid-template-columns: 1fr; } .item-fila-cabecalho { grid-template-columns: auto minmax(0,1fr); } .item-fila-cabecalho .estado-painel { grid-column: 2; } .detalhes-fila dl { grid-template-columns: 1fr; } .item-fila .acoes-fila { flex-direction: column; } .grupo-acoes-fila button { flex: 1 1 auto; } }
+@media(max-width: 780px) { .grade-materias[data-quantidade] { grid-template-columns: 1fr; } .cabecalho-adicao { align-items: flex-start; } .painel-adicao { padding: 12px; } .grade-materias { grid-template-columns: 1fr; } .item-fila-cabecalho { grid-template-columns: auto minmax(0,1fr); } .item-fila-cabecalho .estado-painel { grid-column: 2; } .detalhes-fila dl { grid-template-columns: 1fr; } .item-fila .acoes-fila { flex-direction: column; } .grupo-acoes-fila button { flex: 1 1 auto; } }
