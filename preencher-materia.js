@@ -173,9 +173,12 @@ function criarEnvioIndividual(context, garantirLogin, prepararFotos, criarAba, a
       aviso.textContent='AUTOXS — Confira os campos e clique no botão de enviar do site quando quiser publicar a matéria.' + (avisos.length ? ' ' + avisos.join(' ') : '');
       aviso.style.cssText='position:fixed;bottom:18px;left:18px;right:18px;z-index:2147483647;padding:16px;background:#193c2a;color:#fff;border:1px solid #a2edc5;border-radius:12px;font:14px Segoe UI;pointer-events:none';
       document.body.appendChild(aviso);
-    }, registro.resultado.avisos);
-    await aba.locator('#inp_title').scrollIntoViewIfNeeded();
-    await aba.bringToFront();
+    }, registro.resultado.avisos).catch(() => {});
+    // O formulario ja esta preenchido: estes ultimos passos sao so de conforto.
+    // Se a materia ja foi postada (a pagina mudou) ou a aba ficou em segundo
+    // plano, nao podem virar erro nem devolver a materia ao painel.
+    await aba.bringToFront().catch(() => {});
+    await aba.evaluate(() => document.querySelector('#inp_title')?.scrollIntoView({block:'center'})).catch(() => {});
     return registro.resultado;
   };
   enviar.listarCategorias = async () => {
