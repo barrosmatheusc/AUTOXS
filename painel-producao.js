@@ -84,6 +84,39 @@ async function recuperarLinksPorCompartilhamento(historico, compartilhamento, al
   return recuperadas;
 }
 
+// Conferência de segurança: o acompanhamento da aba do CMS pode perder o
+// clique de postar. Se o título aparece na listagem pública, a matéria foi
+// publicada e entra na Seleção de Links com o link encontrado.
+async function confirmarAguardandoPorLinkPublico(historico, compartilhamento,
+  { sinal = null, progresso = null, limitePaginas = 10 } = {}) {
+  if (!historico.aguardandoPublicacao || !historico.confirmarPublicacaoPorLink || !compartilhamento?.consultarPaginas) return 0;
+  const pendentes = await historico.aguardandoPublicacao();
+  if (!pendentes.length || sinal?.aborted) return 0;
+  const busca = await compartilhamento.consultarPaginas({ limitePaginas, sinal, progresso });
+  if (sinal?.aborted || busca.cancelado) return 0;
+  const publicadas = await historico.publicadas();
+  const urlsOcupadas = new Set(publicadas.map(item => item.urlOriginal).filter(Boolean));
+  const titulosPublicados = new Set(publicadas.map(item => chaveTitulo(item.titulo)));
+  const contagem = new Map();
+  for (const item of pendentes) contagem.set(chaveTitulo(item.titulo), (contagem.get(chaveTitulo(item.titulo)) || 0) + 1);
+  let confirmadas = 0;
+  for (const item of pendentes) {
+    if (sinal?.aborted) break;
+    const chave = chaveTitulo(item.titulo);
+    // Título repetido: sem certeza de qual registro foi postado.
+    if (contagem.get(chave) > 1 || titulosPublicados.has(chave)) continue;
+    const { url } = encontrarLinkPorTitulo(item.titulo, busca.candidatos);
+    if (!url || urlsOcupadas.has(url)) continue;
+    const diaPublico = Date.parse(dataDaUrl(url) + 'T12:00:00Z');
+    if (!Number.isFinite(diaPublico) || Math.abs(diaPublico - Date.parse(item.criadoEm)) > 36 * 60 * 60 * 1000) continue;
+    try {
+      await historico.confirmarPublicacaoPorLink(item.id, chave, url, sinal);
+      urlsOcupadas.add(url); titulosPublicados.add(chave); confirmadas++;
+    } catch (erro) { console.warn('[AUTOXS] Confirmação pela listagem pública: ' + erro.message); }
+  }
+  return confirmadas;
+}
+
 async function recuperarLinksPendentes(historico, request) {
   if (!request?.get || !historico.pendentesRecuperaveis) return 0;
   let recuperadas = 0;
@@ -177,6 +210,8 @@ function criarBuscadorLinks(historico, compartilhamento, {
   function cancelarTodas() { for (const id of ativas.keys()) cancelar(id); }
   async function procurarPendentes() {
     if (!historico.publicadas) return;
+    try { await confirmarAguardandoPorLinkPublico(historico, compartilhamento, { limitePaginas:limite }); }
+    catch (erro) { console.warn('[AUTOXS] Confirmação pela listagem pública: ' + erro.message); }
     for (const item of await historico.publicadas()) {
       if (item.urlOriginal || ativas.has(item.id)) continue;
       try { await procurar(item.id); }
@@ -314,4 +349,4 @@ function criarPainelProducao(context, historico, compartilhamento = null, buscad
   return { abrir, integrar };
 }
 
-module.exports = { criarPainelProducao, recuperarLinksPendentes, recuperarLinksPorCompartilhamento, criarBuscadorLinks };
+module.exports = { criarPainelProducao, recuperarLinksPendentes, recuperarLinksPorCompartilhamento, confirmarAguardandoPorLinkPublico, criarBuscadorLinks };

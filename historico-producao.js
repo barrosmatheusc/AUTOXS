@@ -487,8 +487,33 @@ function criarHistoricoProducao(arquivo = path.join(__dirname, 'historico-autoxs
       return plano.resumo;
     }, null, { backup:true });
   }
+  // Matérias preenchidas pelo Adicionar cuja postagem o acompanhamento da aba
+  // não confirmou (aba reaproveitada, envio fora do formulário etc.).
+  async function aguardandoPublicacao(horas = 48) {
+    const estado = await ler();
+    const limite = relogio().getTime() - horas * 60 * 60 * 1000;
+    return estado.registros.filter(item => item.operacao === 'adicionar' &&
+      ['aguardandoRevisao', 'naoConfirmado', 'erro'].includes(item.situacao) &&
+      Date.parse(item.criadoEm) >= limite).map(item => structuredClone(item));
+  }
+  // A matéria apareceu na listagem pública com o mesmo título: está publicada.
+  async function confirmarPublicacaoPorLink(id, tituloChave, valor, sinal = null) {
+    const url = urlPublica(valor);
+    if (!url || !tituloChave) throw new Error('Link ou título inválido para confirmar a publicação.');
+    return alterar(estado => {
+      const registro = estado.registros.find(item => item.id === id && item.operacao === 'adicionar');
+      if (!registro || chaveTitulo(registro.titulo) !== tituloChave) throw new Error('O título do registro mudou durante a confirmação.');
+      if (registro.situacao === 'concluido') return structuredClone(registro);
+      if (estado.registros.some(item => item.id !== id && item.urlOriginal === url))
+        throw new Error('A URL pública já pertence a outra matéria do histórico.');
+      const instante = agora();
+      Object.assign(registro, { situacao:'concluido', formaConclusao:'automatico', concluidoEm:instante,
+        urlOriginal:url, motivoLinkPendente:'', atualizadoEm:instante });
+      return structuredClone(registro);
+    }, sinal);
+  }
   return { registrar, adicionarLinkManual, responsavel, removerDaSelecao, cadastrarResponsavel, editarResponsavel, removerResponsavel, definirUrl, pendentesRecuperaveis,
-    definirUrlRecuperada, publicadas, definirUrlCompartilhamento, registrarMotivoLink,
+    definirUrlRecuperada, publicadas, aguardandoPublicacao, confirmarPublicacaoPorLink, definirUrlCompartilhamento, registrarMotivoLink,
     observar, consultar, materiasPorResponsavel, relatorio, compartilhavel, limparExpirados,
     exportarDadosHoje, preverImportacao, importarDadosHoje };
 }
