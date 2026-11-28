@@ -173,7 +173,12 @@ $('#adicionar-responsavel').addEventListener('click',async()=>{try{await chamar(
 $('#manual-url').addEventListener('input',()=>{$('#manual-previa').hidden=true;$('#manual-titulo').value='';$('#manual-chapeu').value='';$('#manual-subtitulo').value='';});
 $('#manual-buscar').addEventListener('click',async()=>{
   const botaoBusca=$('#manual-buscar');const url=$('#manual-url').value.trim();
-  if(!url){recado('Informe o link da matéria.',true);return;}
+  if(!url){
+    botaoBusca.disabled=true;recado('Abrindo Últimas do site…');
+    try{await chamar('abrirUltimas');recado('Últimas aberta. Clique em “➕ Selecionar” nas matérias que devem entrar na Seleção de Links.');}
+    catch(erro){recado(erro.message,true);}finally{botaoBusca.disabled=false;}
+    return;
+  }
   botaoBusca.disabled=true;$('#manual-adicionar').disabled=true;$('#manual-cancelar').hidden=false;recado('Buscando informações da matéria…');
   try{
     const resultado=await chamar('buscarMateriaManual',{url});

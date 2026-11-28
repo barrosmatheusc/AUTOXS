@@ -294,6 +294,8 @@ function instalarInterfaceCompartilhamento() {
     .autoxs-compartilhar-botao { appearance:none !important; border:2px solid #08783f !important; border-radius:7px !important; background:#baf3d3 !important; color:#064e2f !important; cursor:pointer !important; font:700 13px/1.2 "Segoe UI",Arial,sans-serif !important; padding:8px 10px !important; white-space:nowrap !important; box-shadow:0 2px 8px #0003 !important; }
     .autoxs-compartilhar-botao:hover { background:#d9f8e8 !important; }
     .autoxs-compartilhar-botao:disabled { cursor:wait !important; opacity:.75 !important; }
+    .autoxs-selecionar-botao { margin-left:6px !important; border-color:#8a6a00 !important; background:#ffe9a8 !important; color:#4a3700 !important; }
+    .autoxs-selecionar-botao:hover { background:#fff3cc !important; }
     .autoxs-compartilhar-fundo { position:fixed !important; inset:0 !important; z-index:2147483646 !important; display:grid !important; place-items:center !important; padding:20px !important; background:#06130dcc !important; }
     .autoxs-compartilhar-fundo[hidden] { display:none !important; }
     .autoxs-compartilhar-modal { width:min(620px,100%) !important; max-height:85vh !important; overflow:auto !important; border:1px solid #456958 !important; border-radius:18px !important; background:#14251d !important; color:#f3faf6 !important; box-shadow:0 28px 90px #0009 !important; padding:24px !important; font:14px/1.5 "Segoe UI",Arial,sans-serif !important; }
@@ -847,6 +849,33 @@ function instalarInterfaceCompartilhamento() {
         void compartilhar(botao, ancora, recipiente);
       });
       faixa.appendChild(botao);
+      // Puxa a matéria direto para a Seleção de Links do AutoXS.
+      const selecionar = document.createElement('button');
+      selecionar.type = 'button';
+      selecionar.className = 'autoxs-compartilhar-botao autoxs-selecionar-botao';
+      selecionar.dataset.autoxsShare = 'true';
+      selecionar.dataset.autoxsUrl = chave;
+      selecionar.textContent = '➕ Selecionar';
+      selecionar.addEventListener('click', async evento => {
+        evento.preventDefault();
+        evento.stopPropagation();
+        if (selecionar.disabled) return;
+        selecionar.disabled = true;
+        selecionar.textContent = '⏳ Selecionando…';
+        try {
+          if (typeof window.selecionarParaLinks !== 'function') throw new Error('Reinicie o AutoXS para usar a seleção.');
+          const dadosAtuais = lerDadosDoLink(ancora, recipiente);
+          const resposta = await window.selecionarParaLinks({ url:ancora.href, titulo:dadosAtuais.titulo, chapeu:dadosAtuais.chapeu });
+          if (!resposta?.ok) throw new Error(resposta?.mensagem || 'Não foi possível selecionar a matéria.');
+          selecionar.textContent = '✅ Na Seleção de Links';
+        } catch (erro) {
+          selecionar.disabled = false;
+          selecionar.textContent = '➕ Selecionar';
+          selecionar.title = erro.message || '';
+          alert('AutoXS: ' + (erro.message || 'Não foi possível selecionar a matéria.'));
+        }
+      });
+      faixa.appendChild(selecionar);
       const referencia = cabecalho || ancora;
       referencia.parentElement.insertBefore(faixa, referencia);
       adicionados += 1;
@@ -883,6 +912,7 @@ function criarCompartilhamento(context, janela) {
   const paginasConsulta = new Set();
   const materias = new Map();
   const paginasVinculadas = new WeakSet();
+  let aoSelecionar = null;
   const navegacoesIniciais = new WeakSet();
 
   async function obterContextoConsulta() {
@@ -915,6 +945,12 @@ function criarCompartilhamento(context, janela) {
       try { return frame === pagina.mainFrame() && pertenceAoSitePublico(frame.url()); }
       catch { return false; }
     };
+    await pagina.exposeBinding('selecionarParaLinks', async ({ frame }, entrada) => {
+      if (!origemValida(frame)) return { ok:false, mensagem:'Abra a página pública da Tribuna do Sertão.' };
+      if (typeof aoSelecionar !== 'function') return { ok:false, mensagem:'A Seleção de Links não está disponível.' };
+      try { return { ok:true, ...(await aoSelecionar(entrada)) }; }
+      catch (erro) { return { ok:false, mensagem:erro.message || 'Não foi possível selecionar a matéria.' }; }
+    });
     await pagina.exposeBinding('prepararCompartilhamento', async ({ frame }, entrada) => {
       if (!origemValida(frame)) return { ok:false, mensagem:'Abra a página pública da Tribuna do Sertão.' };
       const resultado = await lerMateriaEmAbaTemporaria(janela, pagina, entrada);
@@ -1410,6 +1446,7 @@ function criarCompartilhamento(context, janela) {
     consultarPaginas,
     consultarMateria,
     fecharConsultas,
+    definirSelecao: funcao => { aoSelecionar = typeof funcao === 'function' ? funcao : null; },
     abrir: async () => {
       if (!abrindo) abrindo = abrir().finally(() => { abrindo = null; });
       return abrindo;

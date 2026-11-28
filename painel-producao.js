@@ -1,7 +1,7 @@
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { extrairDadosPublicacao, urlEdicao } = require('./url-publicacao-cms');
-const { chaveTitulo, encontrarLinkPorTitulo } = require('./compartilhar-materias');
+const { chaveTitulo, encontrarLinkPorTitulo, identidadeMateria } = require('./compartilhar-materias');
 const { buscarInformacoesNaListagem, validarUrlMateria } = require('./links-manuais');
 const { criarContadorPendentesCms } = require('./pendencias-cms');
 
@@ -228,6 +228,18 @@ function criarPainelProducao(context, historico, compartilhamento = null, buscad
   const urlIntegrada = url + '?integrado=1';
   const buscador = buscadorExterno || criarBuscadorLinks(historico, compartilhamento);
   const pendentesCms = criarContadorPendentesCms(context);
+  // Botão "Selecionar" da página de Últimas: inclui a matéria na Seleção de Links.
+  compartilhamento?.definirSelecao?.(async entrada => {
+    const url = identidadeMateria(validarUrlMateria(entrada?.url).href);
+    let dados = { url, titulo:String(entrada?.titulo || ''), chapeu:String(entrada?.chapeu || ''), subtitulo:'' };
+    try {
+      const leitura = await compartilhamento.consultarMateria({ url, titulo:dados.titulo, chapeu:dados.chapeu });
+      if (leitura?.ok && leitura.dados) dados = { url, titulo:leitura.dados.titulo || dados.titulo,
+        chapeu:leitura.dados.chapeu || dados.chapeu, subtitulo:leitura.dados.subtitulo || '' };
+    } catch (erro) { console.warn('[AUTOXS] Seleção pela listagem: ' + erro.message); }
+    const registro = await historico.adicionarLinkManual(dados);
+    return { titulo:registro.titulo };
+  });
   let pagina = null;
   let abrindo = null;
   let recuperando = null;
@@ -267,6 +279,10 @@ function criarPainelProducao(context, historico, compartilhamento = null, buscad
             } finally { if (buscaManual === controlador) buscaManual = null; }
             break;
           }
+          case 'abrirUltimas':
+            if (!compartilhamento?.abrir) throw new Error('A página de Últimas não está disponível.');
+            await compartilhamento.abrir(); resultado = true;
+            break;
           case 'cancelarBuscaManual':
             resultado = Boolean(buscaManual);
             buscaManual?.abort();
