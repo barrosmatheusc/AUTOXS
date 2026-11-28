@@ -1080,6 +1080,19 @@ async function executar() {
     return encerramentoAutoXS;
   };
   process.once('SIGINT', () => { void encerrarAutoXS(); });
+  // Botão "Reiniciar" do painel: fecha o navegador e abre o AUTOXS.bat em uma
+  // nova janela; esta janela termina sozinha, sem pausa.
+  process.once('autoxs:reiniciar', () => {
+    void (async () => {
+      console.log('🔄 Reiniciando o AutoXS…');
+      await encerrarAutoXS().catch(() => {});
+      const iniciador = path.join(__dirname, 'AUTOXS.bat');
+      const { spawn } = require('node:child_process');
+      spawn('cmd.exe', ['/d', '/s', '/c', `"ping -n 3 127.0.0.1 >nul & start "AutoXS" "${iniciador}""`],
+        { cwd:__dirname, detached:true, stdio:'ignore', windowsHide:true, windowsVerbatimArguments:true }).unref();
+      process.exit(0);
+    })();
+  });
   process.once('SIGTERM', () => { void encerrarAutoXS(); });
   context.on('close', () => {
     void encerrarBuscas();

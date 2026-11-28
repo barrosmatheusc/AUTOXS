@@ -44,6 +44,12 @@ async function criarPainelManual(context, atualizar, enviarAoSite, janelaAdicao 
   };
   const espacoValido = numero => Number.isInteger(numero) && numero >= 1 && numero <= 4;
 
+  await painel.exposeBinding('reiniciarAutoXS', async ({ frame }) => {
+    if (frame !== painel.mainFrame() || frame.url() !== url) return { ok:false, mensagem:'Abra o painel local do AutoXS.' };
+    // O autoxs.js fecha tudo e abre o AUTOXS.bat de novo.
+    if (!process.emit('autoxs:reiniciar')) return { ok:false, mensagem:'Reinicie o AutoXS manualmente desta vez.' };
+    return { ok:true };
+  });
   await painel.exposeBinding('configuracoesAutoXS', async ({ frame }, pedido = {}) => {
     if (frame !== painel.mainFrame() || frame.url() !== url)
       return { ok:false, mensagem:'Abra o painel local do AutoXS.' };

@@ -249,6 +249,7 @@ footer { color: #91a79b; font-size: 13px; line-height: 1.65; padding: 22px 12px 
   </section>
   <footer>Matérias da página escolhida · Somente acima da matéria do jogo Brasil x Japão<br>Busca de fotos por palavra-chave, com 100 resultados por página.</footer>
 </div><div id="divisor-paineis" class="divisor-paineis" role="separator" tabindex="0" aria-label="Ajustar largura dos painéis" aria-orientation="vertical" aria-controls="coluna-automacao coluna-producao" aria-valuemin="320" aria-valuemax="440" aria-valuenow="440"></div><section class="coluna-producao" id="coluna-producao" aria-label="Produção AutoXS"><iframe title="Produção AutoXS"></iframe></section></main>
+<button id="reiniciar-autoxs" type="button" title="Reiniciar o AutoXS" aria-label="Reiniciar o AutoXS">⟳</button>
 <button id="abrir-configuracoes" type="button" title="Configurações" aria-label="Configurações" aria-haspopup="dialog" aria-controls="configuracoes">⚙</button>
 <dialog id="configuracoes" aria-labelledby="configuracoes-titulo">
   <header class="config-cabecalho"><h2 id="configuracoes-titulo">Configurações</h2><button id="fechar-configuracoes" type="button" aria-label="Fechar configurações">×</button></header>
@@ -433,6 +434,17 @@ async function atualizarPagina(pagina, modo = 'visivel') {
     botao.disabled = false;
   }
 }
+</script>
+<script>
+document.querySelector('#reiniciar-autoxs').addEventListener('click', async evento => {
+  const botao = evento.currentTarget;
+  if (!confirm('Reiniciar o AutoXS? Todas as janelas do AutoXS serão fechadas e abertas de novo. Termine de postar as matérias abertas antes.')) return;
+  botao.disabled = true; botao.textContent = '…';
+  try {
+    const resposta = await window.reiniciarAutoXS();
+    if (!resposta?.ok) throw new Error(resposta?.mensagem || 'Não foi possível reiniciar.');
+  } catch (erro) { botao.disabled = false; botao.textContent = '⟳'; alert(erro.message); }
+});
 </script>
 <script src="configuracoes-painel.js"></script>
 <script src="dados-configuracoes.js"></script>
